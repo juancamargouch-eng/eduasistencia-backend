@@ -9,14 +9,38 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config.database import engine, Base
 from .api.api import api_router
 from app.core.websocket_manager import manager
+from app.core.limiter import limiter
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+
 
 # Import models to ensure they are registered with Base
 from .models import * 
 
-# Create tables on startup (good for MVP, use migrations for prod)
-Base.metadata.create_all(bind=engine)
+# MIGRACIONES AUTOMÁTICAS: Sincroniza la base de datos profesionalmente al iniciar
+from alembic.config import Config
+from alembic import command
+from seeder import seed  # Importar el seeder
+
+def run_migrations_and_seed():
+    try:
+        print("Revisando y aplicando migraciones de base de datos...")
+        alembic_cfg = Config("alembic.ini")
+        command.upgrade(alembic_cfg, "head")
+        print("Base de datos sincronizada correctamente.")
+        
+        # Ejecutar el seeder para asegurar el usuario administrador inicial
+        print("Ejecutando seeder para usuario administrador...")
+        seed()
+    except Exception as e:
+        print(f"Error en el proceso de inicio de base de datos: {e}")
+
+# Ejecutar procesos de base de datos antes de iniciar la app
+run_migrations_and_seed()
 
 app = FastAPI(title="Sistema de Asistencia Escolar Inteligente")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS middleware
 cors_origins_str = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
@@ -31,14 +55,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from fastapi.staticfiles import StaticFiles
-
-# Ensure static directory exists
-STATIC_DIR = "static/students"
-if not os.path.exists(STATIC_DIR):
-    os.makedirs(STATIC_DIR, exist_ok=True)
-
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# Static files mount removed as we use S3 Proxy
+# app.mount("/static", StaticFiles(directory="static"), name="static")
 
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse

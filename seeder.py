@@ -4,28 +4,38 @@ from app.models.user import User
 from app.core.security import get_password_hash
 import sys
 
-# Ensure tables exist
-Base.metadata.create_all(bind=engine)
+# El seeder ya no crea tablas, eso lo hace Alembic.
+import os
 
 def seed():
     db = SessionLocal()
     
+    # Obtener credenciales estrictamente desde el entorno (.env)
+    admin_user = os.getenv("FIRST_ADMIN_USER")
+    admin_password = os.getenv("FIRST_ADMIN_PASSWORD")
+    
+    if not admin_user or not admin_password:
+        print("ADVERTENCIA: No se han configurado FIRST_ADMIN_USER o FIRST_ADMIN_PASSWORD en el .env.")
+        print("El seeder no creará ningún usuario administrativo por razones de seguridad.")
+        db.close()
+        return
+
     # Check if admin exists
-    user = db.query(User).filter(User.username == "admin").first()
+    user = db.query(User).filter(User.username == admin_user).first()
     if not user:
-        print("Creating admin user...")
-        admin_user = User(
-            username="admin",
+        print(f"Creando usuario administrador: {admin_user}...")
+        new_admin = User(
+            username=admin_user,
             email="admin@school.com",
-            hashed_password=get_password_hash("admin123"), # Change in production
+            hashed_password=get_password_hash(admin_password),
             is_superuser=True,
             is_active=True
         )
-        db.add(admin_user)
+        db.add(new_admin)
         db.commit()
-        print("Admin user created: admin / admin123")
+        print(f"Usuario {admin_user} creado exitosamente.")
     else:
-        print("Admin user already exists.")
+        print(f"El usuario administrador '{admin_user}' ya existe.")
     
     db.close()
 

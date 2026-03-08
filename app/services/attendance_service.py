@@ -8,6 +8,7 @@ from app import models, schemas
 from app.services.face_recognition import compare_faces
 from app.core.websocket_manager import manager
 from app.services.telegram_service import TelegramService
+from app.services.student_service import StudentService
 
 class AttendanceService:
     @staticmethod
@@ -73,7 +74,7 @@ class AttendanceService:
                                 "timestamp": existing_log.timestamp.strftime("%H:%M:%S"),
                                 "student": {
                                     "full_name": student.full_name,
-                                    "photo_url": student.photo_url,
+                                    "photo_url": StudentService.prepare_student_response(student, for_kiosk=True).photo_url,
                                     "grade": student.grade,
                                     "section": student.section
                                 }
@@ -120,7 +121,7 @@ class AttendanceService:
             "data": {
                 "id": log.id,
                 "student_name": student.full_name,
-                "photo_url": student.photo_url,
+                "photo_url": StudentService.prepare_student_response(student, for_kiosk=True).photo_url,
                 "status": log.status,
                 "timestamp": log.timestamp.isoformat(),
                 "confidence_score": log.confidence_score,

@@ -6,6 +6,7 @@ from ..models.telegram import TelegramConfig
 from ..models.student import Student
 from ..models.attendance import AttendanceLog
 from datetime import datetime
+from .storage_service import StorageService
 
 # Global client to reuse connection
 _telegram_client = None
@@ -174,51 +175,63 @@ class TelegramService:
             print(f"DEBUG: Preparando mensaje para chat_id: {student.telegram_chat_id}")
 
             # 3. Format message
-            status_text = "PUNTUAL" if log.status == "PRESENT" else "TARDANZA"
-            emoji = "✅" if log.status == "PRESENT" else "⚠️"
+            is_entry = log.event_type == 'ENTRY'
+            
+            if is_entry:
+                status_text = "PUNTUAL" if log.status == "PRESENT" else "TARDANZA"
+                emoji = "✅" if log.status == "PRESENT" else "⚠️"
+                event_name = "ENTRADA"
+            else:
+                status_text = "SALIDA REGISTRADA"
+                emoji = "🚪"
+                event_name = "SALIDA"
             
             time_str = log.timestamp.strftime("%H:%M:%S")
             message = (
-                f"{emoji} <b>Notificación de Asistencia</b>\n\n"
+                f"{emoji} <b>Notificación de {event_name.capitalize()}</b>\n\n"
                 f"El estudiante <b>{student.full_name}</b> ha registrado su "
-                f"{'entrada' if log.event_type == 'ENTRY' else 'salida'}.\n\n"
+                f"<b>{event_name.lower()}</b>.\n\n"
                 f"📍 <b>Estado:</b> {status_text}\n"
                 f"🕒 <b>Hora:</b> {time_str}\n"
                 f"📅 <b>Fecha:</b> {log.timestamp.strftime('%d/%m/%Y')}"
             )
 
-            # 4. Resolve Photo Path
+            # 4. Resolve Photo Path (S3)
             file_path = None
+            is_temp_file = False
+            
             if student.photo_url:
-                # photo_url is typically "/static/students/filename.jpg"
-                # Physical path is "backend/backend/static/students/filename.jpg"
-                # __file__ is at backend/app/services/telegram_service.py
-                # Root is dirname(dirname(dirname(abspath(__file__))))
-                # __file__ is at backend/app/services/telegram_service.py
-                root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-                filename = os.path.basename(student.photo_url)
-                
-                # Constructing path to root/static/students/filename
-                file_path = os.path.join(root_dir, "static", "students", filename)
-                
-                print(f"DEBUG: Buscando foto en path: {file_path}")
-                
-                if not os.path.exists(file_path):
-                    print(f"DEBUG: Archivo de foto no encontrado físicamente en: {file_path}")
-                    file_path = None
+                # If it's a full URL (legacy or external), we can't easily download it here without requests
+                # But if it's an S3 key (doesn't start with http), we download it
+                if not student.photo_url.startswith("http"):
+                    print(f"DEBUG: Descargando foto de S3 para Telegram: {student.photo_url}")
+                    file_path = StorageService.download_to_temp_file(student.photo_url)
+                    if file_path:
+                        is_temp_file = True
+                        print(f"DEBUG: Foto S3 descargada en path temporal: {file_path}")
                 else:
-                    print(f"DEBUG: Foto encontrada. Tamaño: {os.path.getsize(file_path)} bytes")
+                    # Legacy local fallback (if the URL is still a relative path without http)
+                    # This part is probably not needed if all photo_urls are keys or full URLs
+                    pass
 
             # 5. Send message (Async)
-            # Prioritize telegram_user_id if we have it
             target_chat = student.telegram_user_id or student.telegram_chat_id
             
-            success = await TelegramService.send_message(
-                config.api_id, config.api_hash, config.bot_token, 
-                target_chat, message,
-                phone=config.phone,
-                file_path=file_path
-            )
+            try:
+                success = await TelegramService.send_message(
+                    config.api_id, config.api_hash, config.bot_token, 
+                    target_chat, message,
+                    phone=config.phone,
+                    file_path=file_path
+                )
+            finally:
+                # Cleanup temp file
+                if is_temp_file and file_path and os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                        print(f"DEBUG: Archivo temporal de foto eliminado: {file_path}")
+                    except:
+                        pass
             
             if success:
                 print(f"DEBUG: Notificación enviada correctamente a {student.full_name}")

@@ -1,6 +1,6 @@
 import numpy as np
 
-def compare_faces(known_encoding: list, check_encoding: list, tolerance: float = 0.45) -> tuple[bool, float]:
+def compare_faces(known_encoding: list, check_encoding: list, tolerance: float = 0.50) -> tuple[bool, float]:
     """
     Compares two face descriptors using Euclidean distance.
     Returns (True, distance) if distance <= tolerance.

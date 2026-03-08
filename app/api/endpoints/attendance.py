@@ -1,5 +1,5 @@
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, File, Form, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, File, Form, UploadFile, Request
 from sqlalchemy.orm import Session
 from datetime import datetime
 import json
@@ -12,10 +12,13 @@ from app.core.websocket_manager import manager
 router = APIRouter()
 
 from app.services.attendance_service import AttendanceService
+from app.services.student_service import StudentService
 
 @router.post("/verify", response_model=schemas.AttendanceLogKiosk)
+@deps.limiter.limit("20/minute")
 async def verify_attendance(
     *,
+    request: Request,
     db: Session = Depends(deps.get_db),
     qr_code: str = Form(None),
     dni: str = Form(None),
@@ -38,6 +41,9 @@ def read_attendance_logs(
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
     logs = db.query(models.AttendanceLog).order_by(models.AttendanceLog.timestamp.desc()).offset(skip).limit(limit).all()
+    for log in logs:
+        if log.student:
+            StudentService.prepare_student_response(log.student)
     return logs
 
 @router.post("/logs/{log_id}/validate", response_model=schemas.AttendanceLog)
@@ -89,6 +95,7 @@ def get_occupancy_stats(
 def get_daily_attendance_status(
     grade: str,
     section: str,
+    schedule_id: int = None,
     date_str: str = None, # YYYY-MM-DD
     db: Session = Depends(deps.get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
@@ -128,12 +135,17 @@ def get_daily_attendance_status(
         holiday_name = holidays_pe.get((query_date.month, query_date.day))
         is_non_working_day = is_weekend or (holiday_name is not None)
         
-        # 3. Fetch Students
-        students = db.query(models.Student).filter(
+        # 3. Fetch Students with optional schedule filter
+        query = db.query(models.Student).filter(
             models.Student.grade == grade,
             models.Student.section == section,
             models.Student.is_active == True
-        ).all()
+        )
+        
+        if schedule_id:
+            query = query.filter(models.Student.schedule_id == schedule_id)
+            
+        students = query.all()
         
         # 4. Fetch Logs for that day
         # We want successful entries primarily
@@ -178,7 +190,7 @@ def get_daily_attendance_status(
             results.append({
                 "id": student.id,
                 "full_name": student.full_name,
-                "photo_url": student.photo_url,
+                "photo_url": StudentService.prepare_student_response(student).photo_url,
                 "status": status,
                 "entry_time": entry_time,
                 "schedule": schedule_info
@@ -275,7 +287,7 @@ def get_student_absences(
             "full_name": student.full_name,
             "grade": student.grade,
             "section": student.section,
-            "photo_url": student.photo_url,
+            "photo_url": StudentService.prepare_student_response(student).photo_url,
             "schedule": {
                 "name": student.schedule.name,
                 "start_time": student.schedule.start_time.strftime("%H:%M")

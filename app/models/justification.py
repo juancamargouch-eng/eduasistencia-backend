@@ -14,8 +14,8 @@ class Justification(Base):
     id = Column(Integer, primary_key=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id"))
     date = Column(Date, index=True)
-    reason = Column(String)
-    status = Column(String, default=JustificationStatus.PENDING) # stored as string for simplicity in SQLite/Postgres compatibility
-    evidence_url = Column(String, nullable=True)
+    reason = Column(String(500))
+    status = Column(String(20), default=JustificationStatus.PENDING) 
+    evidence_url = Column(String(512), nullable=True)
     
     student = relationship("Student", back_populates="justifications")

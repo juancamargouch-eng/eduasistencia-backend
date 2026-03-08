@@ -10,13 +10,51 @@ import pandas as pd
 
 from app import models, schemas
 from app.services.telegram_service import TelegramService
+from app.services.storage_service import StorageService
 from app.models.telegram import TelegramConfig
 
 class StudentService:
     @staticmethod
+    def prepare_student_response(student: models.Student, for_kiosk: bool = False) -> models.Student:
+        """
+        Signs the photo_url if it's an S3 key or a legacy Linode URL.
+        Uses HMAC signature for ALL proxy URLs because <img> tags cannot send headers.
+        """
+        if student and student.photo_url:
+            key = student.photo_url
+            
+            # If it's a full legacy URL, extract the key
+            if key.startswith("http"):
+                bucket = os.getenv("AWS_STORAGE_BUCKET_NAME", "pegasus")
+                endpoint = os.getenv("AWS_S3_ENDPOINT_URL", "").replace("https://", "")
+                
+                # Check if it's our bucket
+                marker = f"{bucket}.{endpoint}/"
+                if marker in key:
+                    key = key.split(marker)[1]
+                else:
+                    # If it's a different HTTP link, leave it as is
+                    return student
+            
+            # Convert key to signed proxy URL
+            student.photo_url = StorageService.get_signed_proxy_url(key)
+            
+        return student
+
+    @staticmethod
+    def prepare_students_response(students: List[models.Student], for_kiosk: bool = False) -> List[models.Student]:
+        """
+        Signs photo_urls for a list of students.
+        """
+        for s in students:
+            StudentService.prepare_student_response(s, for_kiosk)
+        return students
+
+    @staticmethod
     async def create_student(
         db: Session,
-        full_name: str,
+        first_name: str,
+        last_name: str,
         grade: str,
         section: str,
         file: UploadFile,
@@ -26,6 +64,17 @@ class StudentService:
         telegram_chat_id: Optional[str] = None,
         notify_telegram: bool = True
     ) -> models.Student:
+        # Normalization
+        first_name = first_name.strip().upper()
+        last_name = last_name.strip().upper()
+        full_name = f"{last_name}, {first_name}"
+        
+        # DNI: Only numbers
+        dni = "".join(filter(str.isdigit, dni))
+        
+        # Grade: UPPERCASE and clean
+        grade = grade.strip().upper()
+        section = section.strip().upper()
         try:
             encoding = json.loads(face_descriptor)
             if not isinstance(encoding, list) or len(encoding) != 128:
@@ -33,18 +82,10 @@ class StudentService:
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Descriptor facial inválido: {str(e)}")
 
-        # Save file to disk
-        os.makedirs("backend/static/students", exist_ok=True)
-        file_ext = file.filename.split(".")[-1]
-        filename = f"{uuid.uuid4()}.{file_ext}"
-        file_path = f"backend/static/students/{filename}"
-        
-        with open(file_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
+        # Save file to S3
+        photo_url = await StorageService.upload_file(file)
             
         qr_code_hash = str(uuid.uuid4())
-        photo_url = f"/static/students/{filename}"
         
         # Resolve Telegram User ID
         telegram_user_id = None
@@ -59,6 +100,8 @@ class StudentService:
                     print(f"DEBUG ERROR resolving Telegram ID: {e}")
         
         student = models.Student(
+            first_name=first_name,
+            last_name=last_name,
             full_name=full_name,
             grade=grade,
             section=section,
@@ -81,36 +124,68 @@ class StudentService:
     async def update_student(
         db: Session,
         student_id: int,
-        student_in: schemas.StudentUpdate
+        student_in: Optional[schemas.StudentUpdate] = None,
+        file: Optional[UploadFile] = None,
+        face_descriptor: Optional[str] = None
     ) -> models.Student:
         student = db.query(models.Student).filter(models.Student.id == student_id).first()
         if not student:
             raise HTTPException(status_code=404, detail="Student not found")
             
-        update_data = student_in.dict(exclude_unset=True)
-        
-        # Resolve Telegram User ID if chat_id changed
-        if "telegram_chat_id" in update_data:
-            if update_data["telegram_chat_id"]:
-                config = db.query(TelegramConfig).filter(TelegramConfig.is_active == True).first()
-                if config and config.api_id and config.api_hash:
-                    try:
-                        resolved_user_id = await TelegramService.resolve_and_add_contact(
-                            config.api_id, config.api_hash, update_data["telegram_chat_id"], student.full_name
-                        )
-                        if resolved_user_id:
-                            student.telegram_user_id = resolved_user_id
-                    except Exception as e:
-                        print(f"DEBUG ERROR resolving Telegram ID on update: {e}")
-            else:
-                student.telegram_user_id = None
+        if student_in:
+            update_data = student_in.dict(exclude_unset=True)
+            
+            # Resolve Telegram User ID if chat_id changed
+            if "telegram_chat_id" in update_data:
+                if update_data["telegram_chat_id"]:
+                    config = db.query(TelegramConfig).filter(TelegramConfig.is_active == True).first()
+                    if config and config.api_id and config.api_hash:
+                        try:
+                            resolved_user_id = await TelegramService.resolve_and_add_contact(
+                                config.api_id, config.api_hash, update_data["telegram_chat_id"], student.full_name
+                            )
+                            if resolved_user_id:
+                                student.telegram_user_id = resolved_user_id
+                        except Exception as e:
+                            print(f"DEBUG ERROR resolving Telegram ID on update: {e}")
+                else:
+                    student.telegram_user_id = None
 
-        # Avoid overwriting with manual provided ID if we managed it
-        if "telegram_user_id" in update_data and student.telegram_user_id:
-            del update_data["telegram_user_id"]
+            # Avoid overwriting with manual provided ID if we managed it
+            if "telegram_user_id" in update_data and student.telegram_user_id:
+                del update_data["telegram_user_id"]
 
-        for field, value in update_data.items():
-            setattr(student, field, value)
+            for field, value in update_data.items():
+                if field == "first_name":
+                    value = value.strip().upper()
+                elif field == "last_name":
+                    value = value.strip().upper()
+                elif field == "dni":
+                    value = "".join(filter(str.isdigit, value))
+                
+                setattr(student, field, value)
+            
+            # Update full_name if parts changed
+            if "first_name" in update_data or "last_name" in update_data:
+                student.full_name = f"{student.last_name}, {student.first_name}"
+
+        # Handle Photo Update
+        if file:
+            # Delete old photo if it exists in S3 (optional, but good practice)
+            # if student.photo_url:
+            #     StorageService.delete_file(student.photo_url)
+            
+            new_photo_url = await StorageService.upload_file(file)
+            student.photo_url = new_photo_url
+
+        # Handle Face Encoding Update
+        if face_descriptor:
+            try:
+                encoding = json.loads(face_descriptor)
+                if isinstance(encoding, list) and len(encoding) == 128:
+                    student.face_encoding = encoding
+            except:
+                pass
 
         db.add(student)
         db.commit()
@@ -128,12 +203,9 @@ class StudentService:
             db.query(models.AttendanceLog).filter(models.AttendanceLog.student_id == student_id).delete()
             db.query(models.Justification).filter(models.Justification.student_id == student_id).delete()
 
-            # Delete photo
+            # Delete photo from S3
             if student.photo_url:
-                filename = os.path.basename(student.photo_url)
-                file_path = f"backend/static/students/{filename}"
-                if os.path.exists(file_path):
-                    os.remove(file_path)
+                StorageService.delete_file(student.photo_url)
 
             db.delete(student)
             db.commit()
@@ -158,14 +230,21 @@ class StudentService:
             
             # Map columns
             mapping = {
-                'nombre': 'nombre', 'full_name': 'nombre',
+                'nombre': 'nombre', 'nombres': 'nombre', 'first_name': 'nombre',
+                'apellido': 'apellido', 'apellidos': 'apellido', 'last_name': 'apellido',
                 'grado': 'grado', 'grade': 'grado',
                 'seccion': 'seccion', 'section': 'seccion',
                 'dni': 'dni'
             }
             
             df = df.rename(columns=mapping)
-            required = ['nombre', 'grado', 'seccion', 'dni']
+            
+            # Check for either single 'nombre' (legacy/simple) or 'nombre' + 'apellido'
+            if 'apellido' in df.columns and 'nombre' in df.columns:
+                required = ['nombre', 'apellido', 'grado', 'seccion', 'dni']
+            else:
+                required = ['nombre', 'grado', 'seccion', 'dni']
+
             for col in required:
                 if col not in df.columns:
                     raise ValueError(f"Missing column: {col}")
@@ -175,13 +254,35 @@ class StudentService:
             
             for index, row in df.iterrows():
                 try:
+                    # Normalization for Import
+                    fn = str(row['nombre']).strip().upper()
+                    ln = str(row.get('apellido', '')).strip().upper()
+                    
+                    if ln:
+                        full_name = f"{ln}, {fn}"
+                    else:
+                        # Fallback for single name column
+                        full_name = fn 
+                        # Try to split if contains comma
+                        if ',' in fn:
+                            ln_part, fn_part = [p.strip() for p in fn.split(',', 1)]
+                            ln, fn = ln_part, fn_part
+                        else:
+                            ln, fn = "", fn
+                    
+                    dni_clean = "".join(filter(str.isdigit, str(row['dni'])))
+                    grade_norm = str(row['grado']).strip().upper()
+                    section_norm = str(row['seccion']).strip().upper()
+
                     new_student = models.Student(
-                        full_name=str(row['nombre']).strip(),
-                        grade=str(row['grado']).strip(),
-                        section=str(row['seccion']).strip(),
+                        first_name=fn,
+                        last_name=ln,
+                        full_name=full_name,
+                        grade=grade_norm,
+                        section=section_norm,
                         qr_code_hash=str(uuid.uuid4()),
                         is_active=True,
-                        dni=str(row['dni']).strip()
+                        dni=dni_clean
                     )
                     db.add(new_student)
                     created_count += 1
@@ -192,3 +293,101 @@ class StudentService:
             return {"total_created": created_count, "errors": errors}
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
+
+    @staticmethod
+    async def enroll_student_by_dni(
+        db: Session,
+        dni: str,
+        file: UploadFile,
+        face_descriptor: str
+    ) -> models.Student:
+        # Clean DNI
+        dni = "".join(filter(str.isdigit, dni))
+        
+        student = db.query(models.Student).filter(models.Student.dni == dni).first()
+        if not student:
+            raise HTTPException(status_code=404, detail=f"Estudiante con DNI {dni} no encontrado")
+            
+        try:
+            encoding = json.loads(face_descriptor)
+            if not isinstance(encoding, list) or len(encoding) != 128:
+                raise ValueError("Formato de descriptor inválido")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Descriptor facial inválido: {str(e)}")
+
+        # Save file to S3
+        # Delete old photo if exists
+        if student.photo_url:
+            StorageService.delete_file(student.photo_url)
+        
+        new_photo_url = await StorageService.upload_file(file)
+            
+        student.photo_url = new_photo_url
+        student.face_encoding = encoding
+        
+        db.add(student)
+        db.commit()
+        db.refresh(student)
+        return StudentService.prepare_student_response(student)
+
+    @staticmethod
+    async def check_s3_photos(dnis: List[str]) -> List[dict]:
+        """
+        Checks which DNI.jpg files exist in S3 and returns their presigned URLs.
+        """
+        results = []
+        base_path = os.getenv("STORAGE_BASE_PATH", "eduasistencia/fotos-estudiantes")
+        
+        for dni in dnis:
+            # Clean DNI to be sure
+            clean_dni = "".join(filter(str.isdigit, str(dni)))
+            if not clean_dni:
+                continue
+                
+            key = f"{base_path}/{clean_dni}.jpg"
+            # Also check png just in case
+            if not StorageService.check_file_exists(key):
+                key = f"{base_path}/{clean_dni}.png"
+                if not StorageService.check_file_exists(key):
+                    continue
+            
+            # If exists, generate presigned URL
+            url = StorageService.get_presigned_url(key)
+            results.append({
+                "dni": clean_dni,
+                "photo_url": url,
+                "s3_key": key
+            })
+            
+        return results
+
+    @staticmethod
+    async def enroll_student_by_s3_key(
+        db: Session,
+        dni: str,
+        s3_key: str,
+        face_descriptor: str
+    ) -> models.Student:
+        """
+        Enrolls a student using a photo already in S3.
+        """
+        dni = "".join(filter(str.isdigit, dni))
+        student = db.query(models.Student).filter(models.Student.dni == dni).first()
+        if not student:
+            raise HTTPException(status_code=404, detail=f"Estudiante con DNI {dni} no encontrado")
+
+        try:
+            encoding = json.loads(face_descriptor)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Descriptor facial inválido: {str(e)}")
+
+        # No need to delete old photo if we are just "claiming" one from S3 
+        # (Though usually the UI will check if it's already there)
+        
+        student.photo_url = s3_key
+        student.face_encoding = encoding
+        
+        db.add(student)
+        db.commit()
+        db.refresh(student)
+        return StudentService.prepare_student_response(student)

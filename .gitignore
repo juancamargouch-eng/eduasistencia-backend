@@ -12,3 +12,15 @@ static/students/*
 *.sqlite3
 .vscode/
 .idea/
+# Debug scripts
+check_recent.py
+debug_s3_structure.py
+find_file.py
+inspect_photos.py
+list_s3.py
+test_full_reg.py
+test_s3_upload.py
+test_register_debug.py
+sync_names.py
+update_schema_v2.py
+scripts_utiles/

@@ -3,7 +3,9 @@ from typing import Optional, List
 from datetime import datetime
 
 class StudentBase(BaseModel):
-    full_name: str
+    first_name: str
+    last_name: str
+    full_name: Optional[str] = None
     grade: str
     section: str
     telegram_chat_id: Optional[str] = None
@@ -11,6 +13,8 @@ class StudentBase(BaseModel):
     notify_telegram: bool = True
 
 class StudentKiosk(BaseModel):
+    first_name: str
+    last_name: str
     full_name: str
     grade: str
     section: str
@@ -21,6 +25,8 @@ class StudentKiosk(BaseModel):
 
 class StudentSummary(BaseModel):
     id: int
+    first_name: str
+    last_name: str
     full_name: str
     dni: Optional[str] = None
     grade: str
@@ -33,6 +39,8 @@ class StudentCreate(StudentBase):
     pass
 
 class StudentUpdate(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     full_name: Optional[str] = None
     grade: Optional[str] = None
     section: Optional[str] = None

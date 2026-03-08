@@ -1,6 +1,6 @@
 from datetime import timedelta
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
@@ -11,7 +11,9 @@ from app.api import deps
 router = APIRouter()
 
 @router.post("/token", response_model=schemas.user.Token)
+@deps.limiter.limit("5/minute")
 def login_access_token(
+    request: Request,
     db: Session = Depends(deps.get_db), form_data: OAuth2PasswordRequestForm = Depends()
 ) -> Any:
     """
@@ -30,4 +32,5 @@ def login_access_token(
             data={"sub": user.username}, expires_delta=access_token_expires
         ),
         "token_type": "bearer",
+        "is_superuser": user.is_superuser
     }

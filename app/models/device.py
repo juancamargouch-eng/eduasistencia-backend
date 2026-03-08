@@ -6,9 +6,9 @@ class Device(Base):
     __tablename__ = "devices"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, index=True) # e.g. "Main Entrance Kiosk"
-    ip_address = Column(String, nullable=True)
+    name = Column(String(100), unique=True, index=True) # e.g. "Main Entrance Kiosk"
+    ip_address = Column(String(45), nullable=True)
     last_heartbeat = Column(TIMESTAMP(timezone=True), server_default=func.now())
     is_active = Column(Boolean, default=True)
-    location = Column(String, nullable=True) # e.g. "Gate A"
-    device_type = Column(String, default="KIOSK") # KIOSK, TURNSTILE, etc.
+    location = Column(String(255), nullable=True) # e.g. "Gate A"
+    device_type = Column(String(50), default="KIOSK") # KIOSK, TURNSTILE, etc.
