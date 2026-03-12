@@ -10,12 +10,18 @@ import uuid
 class StorageService:
     @staticmethod
     def _get_client():
+        from botocore.client import Config
         return boto3.client(
             's3',
             aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
             aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
             endpoint_url=os.getenv("AWS_S3_ENDPOINT_URL"),
-            region_name=os.getenv("AWS_DEFAULT_REGION")
+            region_name=os.getenv("AWS_DEFAULT_REGION"),
+            config=Config(
+                signature_version='s3v4',
+                s3={'addressing_style': 'virtual'},
+                retries={'max_attempts': 3, 'mode': 'standard'}
+            )
         )
 
     @staticmethod

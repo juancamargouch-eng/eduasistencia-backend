@@ -26,6 +26,7 @@ def seed():
         print(f"Creando usuario administrador: {admin_user}...")
         new_admin = User(
             username=admin_user,
+            full_name="Administrador del Sistema",
             email="admin@school.com",
             hashed_password=get_password_hash(admin_password),
             is_superuser=True,

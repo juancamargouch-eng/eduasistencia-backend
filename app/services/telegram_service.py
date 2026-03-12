@@ -60,37 +60,56 @@ class TelegramService:
             return None
             
         try:
-            # Check if identifier is phone (starts with + or digits only) or username
-            is_phone = identifier.startswith('+') or identifier.isdigit()
+            # Normalization: Remove spaces, dashes, etc.
+            clean_id = identifier.strip().replace(" ", "").replace("-", "")
             
-            if is_phone:
-                phone = identifier if identifier.startswith('+') else f"+{identifier}"
-                print(f"DEBUG: Attempting to add contact by phone: {phone}")
-                # Add as contact
+            # Check if identifier is phone or username
+            is_probably_phone = clean_id.startswith('+') or clean_id.isdigit()
+            
+            if is_probably_phone:
+                phone = clean_id
+                # Peru logic: if 9 digits and doesn't start with +, assume +51
+                if len(phone) == 9 and not phone.startswith('+'):
+                    phone = f"+51{phone}"
+                elif not phone.startswith('+'):
+                    phone = f"+{phone}"
+                
+                print(f"DEBUG: Intentando agregar contacto por teléfono: {phone}")
+                
+                # Import Contact
+                import random
                 contact = types.InputPhoneContact(
-                    client_id=0, # Any random long
+                    client_id=random.getrandbits(31), 
                     phone=phone,
                     first_name=first_name,
                     last_name=""
                 )
+                
                 result = await client(functions.contacts.ImportContactsRequest([contact]))
+                
                 if result.users:
                     user = result.users[0]
-                    print(f"DEBUG: Contact imported. User ID: {user.id}")
+                    print(f"DEBUG: Contacto importado exitosamente. User ID: {user.id}")
                     return str(user.id)
                 else:
-                    print(f"DEBUG: Contact import request returned no users for {phone}")
+                    # Alternativa: intentar obtener entidad directamente si ya existía
+                    try:
+                        user = await client.get_entity(phone)
+                        print(f"DEBUG: Entidad obtenida directamente. User ID: {user.id}")
+                        return str(user.id)
+                    except:
+                        print(f"DEBUG: No se pudo encontrar usuario para el teléfono {phone}")
             else:
                 # Resolve username
-                username = identifier.replace('@', '')
-                print(f"DEBUG: Attempting to resolve username: {username}")
+                username = clean_id.replace('@', '')
+                print(f"DEBUG: Intentando resolver username: {username}")
                 result = await client(functions.contacts.ResolveUsernameRequest(username))
                 if result.users:
                     user = result.users[0]
-                    print(f"DEBUG: Username resolved. User ID: {user.id}")
+                    print(f"DEBUG: Username resuelto. User ID: {user.id}")
                     return str(user.id)
                 else:
-                    print(f"DEBUG: Username resolution returned no users for {username}")
+                    print(f"DEBUG: No se pudo resolver el username {username}")
             
             return None
         except Exception as e:

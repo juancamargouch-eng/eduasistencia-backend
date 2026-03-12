@@ -75,19 +75,23 @@ async def update_student(
     face_descriptor: Optional[str] = Form(None),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
-    # Build a temporary StudentUpdate schema to reuse validation if needed
-    # or just pass raw fields to service
-    student_in = schemas.StudentUpdate(
-        first_name=first_name,
-        last_name=last_name,
-        grade=grade,
-        section=section,
-        dni=dni,
-        is_active=is_active,
-        schedule_id=schedule_id,
-        telegram_chat_id=telegram_chat_id,
-        notify_telegram=notify_telegram
-    )
+    # Build a temporary StudentUpdate schema to reuse validation
+    # Extract only provided fields to avoid sending Nones to service
+    update_dict = {
+        "first_name": first_name,
+        "last_name": last_name,
+        "grade": grade,
+        "section": section,
+        "dni": dni,
+        "is_active": is_active,
+        "schedule_id": schedule_id,
+        "telegram_chat_id": telegram_chat_id,
+        "notify_telegram": notify_telegram
+    }
+    
+    # Filter out None values
+    filtered_update = {k: v for k, v in update_dict.items() if v is not None}
+    student_in = schemas.StudentUpdate(**filtered_update)
     
     student = await StudentService.update_student(
         db, 
@@ -198,17 +202,17 @@ async def photo_proxy(
     if not s3_key.startswith(base_path):
         s3_key = f"{base_path}/{s3_key}".replace("//", "/")
 
-    # 4. Generar URL Firmada y Redirigir (Optimización de velocidad)
-    presigned_url = StorageService.get_presigned_url(s3_key, expires_in=300) # Válida por 5 min
-    if not presigned_url:
-        print(f"DEBUG PROXY: Error al generar URL firmada para {s3_key}")
-        raise HTTPException(status_code=404, detail="Error al obtener acceso a la foto")
-        
-    print(f"DEBUG PROXY: Redirigiendo a S3 para {s3_key}")
-    return RedirectResponse(
-        presigned_url, 
-        status_code=307,
-        headers={
-            "Cache-Control": "public, max-age=3600", # El navegador recordará la redirección por 1 hora
-        }
-    )
+    # 4. Generar URL Firmada y Redirigir
+    try:
+        presigned_url = StorageService.get_presigned_url(s3_key, expires_in=3600)
+        if not presigned_url:
+            raise HTTPException(status_code=404, detail="Error al generar acceso a la foto")
+            
+        return RedirectResponse(
+            presigned_url, 
+            status_code=307,
+            headers={"Cache-Control": "public, max-age=3600"}
+        )
+    except Exception as e:
+        print(f"DEBUG PROXY ERROR: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))

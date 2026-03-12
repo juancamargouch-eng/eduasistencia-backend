@@ -15,7 +15,7 @@ from app.services.attendance_service import AttendanceService
 from app.services.student_service import StudentService
 
 @router.post("/verify", response_model=schemas.AttendanceLogKiosk)
-@deps.limiter.limit("20/minute")
+@deps.limiter.limit("60/minute")
 async def verify_attendance(
     *,
     request: Request,
@@ -24,6 +24,7 @@ async def verify_attendance(
     dni: str = Form(None),
     face_descriptor: str = Form(...),
     event_type: str = Form("ENTRY"),
+    file: UploadFile = File(None),
 ) -> Any:
     return await AttendanceService.verify_attendance(
         db=db,
@@ -60,35 +61,85 @@ def get_occupancy_stats(
     db: Session = Depends(deps.get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
-    # Simple calculation: Count ENTRY - Count EXIT for today
-    from sqlalchemy import func
-    # Use naive usage of now() might be tricky with timezone, so let's stick to date() via SQL
-    
-    # Check dialect to see if we need cast. SQLite/Postgres usually handle func.date(timestamp) ok.
-    # But let's use python date to filter range if we want to be safe or just use SQL func.
-    
+    """
+    Returns the current occupancy status:
+    - total_entries: Total entry logs today
+    - total_exits: Total exit logs today
+    - current_count: students currently in campus
+    - students: List of students currently in campus (ENTRY without subsequent EXIT)
+    """
+    from sqlalchemy import func, and_, not_, exists
     today = datetime.now().date()
     
-    # For SQLite, func.date might need string format. Postgres works.
-    # Given environment is likely Windows/SQLite now? Or Postgres? 
-    # Ah, config is DATABASE_URL... likely PostgreSQL from earlier context (psycopg2 installed).
-    
-    entries = db.query(func.count(models.AttendanceLog.id)).filter(
+    # Subquery: Check if an EXIT exists for the student today
+    exit_exists = exists().where(
+        and_(
+            models.AttendanceLog.student_id == models.Student.id,
+            models.AttendanceLog.event_type == "EXIT",
+            models.AttendanceLog.verification_status == True,
+            func.date(models.AttendanceLog.timestamp) == today
+        )
+    )
+
+    # Query: Students who have an ENTRY today but NO EXIT
+    students_in_campus = db.query(models.Student).filter(
+        models.Student.is_active == True,
+        exists().where(
+            and_(
+                models.AttendanceLog.student_id == models.Student.id,
+                models.AttendanceLog.event_type == "ENTRY",
+                models.AttendanceLog.verification_status == True,
+                func.date(models.AttendanceLog.timestamp) == today
+            )
+        ),
+        not_(exit_exists)
+    ).all()
+
+    # Stat counters
+    total_entries = db.query(func.count(models.AttendanceLog.id)).filter(
         func.date(models.AttendanceLog.timestamp) == today,
         models.AttendanceLog.event_type == "ENTRY",
         models.AttendanceLog.verification_status == True
-    ).scalar()
+    ).scalar() or 0
     
-    exits = db.query(func.count(models.AttendanceLog.id)).filter(
+    total_exits = db.query(func.count(models.AttendanceLog.id)).filter(
         func.date(models.AttendanceLog.timestamp) == today,
         models.AttendanceLog.event_type == "EXIT",
         models.AttendanceLog.verification_status == True
-    ).scalar()
-    
+    ).scalar() or 0
+
+    present_students = []
+    for s in students_in_campus:
+        # Prepare signed photo URL
+        s_processed = StudentService.prepare_student_response(s, for_kiosk=True)
+        
+        # Get the entry time for display
+        entry_log = db.query(models.AttendanceLog).filter(
+            models.AttendanceLog.student_id == s.id,
+            models.AttendanceLog.event_type == "ENTRY",
+            models.AttendanceLog.verification_status == True,
+            func.date(models.AttendanceLog.timestamp) == today
+        ).order_by(models.AttendanceLog.timestamp.desc()).first()
+        
+        # Manual dict construction to avoid .dict() crash on SQLAlchemy model
+        student_data = {
+            "id": s_processed.id,
+            "first_name": s_processed.first_name,
+            "last_name": s_processed.last_name,
+            "full_name": s_processed.full_name,
+            "photo_url": s_processed.photo_url,
+            "grade": s_processed.grade,
+            "section": s_processed.section,
+            "dni": s_processed.dni,
+            "entry_time": entry_log.timestamp.isoformat() if entry_log else None
+        }
+        present_students.append(student_data)
+
     return {
-        "entries": entries,
-        "exits": exits,
-        "current_occupancy": entries - exits
+        "total_entries": total_entries,
+        "total_exits": total_exits,
+        "current_count": len(present_students),
+        "students": present_students
     }
 
 @router.get("/daily-status")

@@ -156,18 +156,24 @@ class StudentService:
                 del update_data["telegram_user_id"]
 
             for field, value in update_data.items():
-                if field == "first_name":
+                if value is None:
+                    continue
+                    
+                if field == "first_name" and isinstance(value, str):
                     value = value.strip().upper()
-                elif field == "last_name":
+                elif field == "last_name" and isinstance(value, str):
                     value = value.strip().upper()
-                elif field == "dni":
+                elif field == "dni" and isinstance(value, str):
                     value = "".join(filter(str.isdigit, value))
                 
                 setattr(student, field, value)
             
             # Update full_name if parts changed
             if "first_name" in update_data or "last_name" in update_data:
-                student.full_name = f"{student.last_name}, {student.first_name}"
+                # Ensure we have strings to avoid None + string error
+                ln = (student.last_name or "").strip()
+                fn = (student.first_name or "").strip()
+                student.full_name = f"{ln}, {fn}"
 
         # Handle Photo Update
         if file:
