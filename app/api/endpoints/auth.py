@@ -29,8 +29,9 @@ def login_access_token(
     access_token_expires = timedelta(minutes=security.ACCESS_TOKEN_EXPIRE_MINUTES)
     return {
         "access_token": security.create_access_token(
-            data={"sub": user.username}, expires_delta=access_token_expires
+            data={"sub": user.username, "role": user.role}, expires_delta=access_token_expires
         ),
         "token_type": "bearer",
-        "is_superuser": user.is_superuser
+        "is_superuser": user.is_superuser,
+        "role": user.role
     }

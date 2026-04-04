@@ -12,6 +12,8 @@ class AttendanceLog(Base):
     verification_status = Column(Boolean, default=False)
     confidence_score = Column(Float, CheckConstraint('confidence_score >= 0 AND confidence_score <= 1'))
     failure_reason = Column(String(255), nullable=True) # e.g. "Low Confidence", "QR Invalid", "Face Mismatch"
+    device_source = Column(String(100), nullable=True) # e.g. "Kiosko Central"
+
     event_type = Column(String(20), default="ENTRY") # ENTRY, EXIT
     status = Column(String(20), default="PRESENT") # PRESENT, LATE, ABSENT
 

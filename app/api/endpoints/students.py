@@ -17,15 +17,37 @@ from app.services.student_service import StudentService
 from app.services.storage_service import StorageService
 from fastapi.responses import StreamingResponse, RedirectResponse
 
-@router.get("/", response_model=List[schemas.Student])
+@router.get("/", response_model=schemas.student.StudentPagination)
 def read_students(
     db: Session = Depends(deps.get_db),
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 50,
+    grade: Optional[str] = None,
+    section: Optional[str] = None,
+    search: Optional[str] = None,
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
-    students = db.query(models.Student).offset(skip).limit(limit).all()
-    return StudentService.prepare_students_response(students)
+    query = db.query(models.Student)
+    if grade:
+        query = query.filter(models.Student.grade == grade)
+    if section:
+        query = query.filter(models.Student.section == section)
+    if search:
+        search_filter = f"%{search}%"
+        query = query.filter(
+            (models.Student.full_name.ilike(search_filter)) |
+            (models.Student.dni.like(search_filter))
+        )
+        
+    total = query.count()
+    students = query.offset(skip).limit(limit).all()
+    
+    return {
+        "total": total,
+        "items": StudentService.prepare_students_response(students),
+        "skip": skip,
+        "limit": limit
+    }
 
 @router.post("/register", response_model=schemas.Student)
 async def create_student(
@@ -41,7 +63,7 @@ async def create_student(
     schedule_id: Optional[int] = Form(None),
     telegram_chat_id: Optional[str] = Form(None),
     notify_telegram: bool = Form(True),
-    current_user: models.User = Depends(deps.get_current_active_user),
+    current_user: models.User = Depends(deps.get_current_active_admin),
 ) -> Any:
     return await StudentService.create_student(
         db=db,
@@ -73,7 +95,7 @@ async def update_student(
     notify_telegram: Optional[bool] = Form(None),
     file: Optional[UploadFile] = File(None),
     face_descriptor: Optional[str] = Form(None),
-    current_user: models.User = Depends(deps.get_current_active_user),
+    current_user: models.User = Depends(deps.get_current_active_admin),
 ) -> Any:
     # Build a temporary StudentUpdate schema to reuse validation
     # Extract only provided fields to avoid sending Nones to service
@@ -107,7 +129,7 @@ def delete_student(
     *,
     db: Session = Depends(deps.get_db),
     student_id: int,
-    current_user: models.User = Depends(deps.get_current_active_user),
+    current_user: models.User = Depends(deps.get_current_active_admin),
 ) -> Any:
     return StudentService.delete_student(db, student_id)
 
@@ -115,7 +137,7 @@ def delete_student(
 async def import_students(
     file: UploadFile = File(...),
     db: Session = Depends(deps.get_db),
-    current_user: models.User = Depends(deps.get_current_active_user),
+    current_user: models.User = Depends(deps.get_current_active_admin),
 ):
     return await StudentService.import_students(db, file)
 
@@ -126,7 +148,7 @@ async def enroll_by_dni(
     dni: str = Form(...),
     file: UploadFile = File(...),
     face_descriptor: str = Form(...),
-    current_user: models.User = Depends(deps.get_current_active_user),
+    current_user: models.User = Depends(deps.get_current_active_admin),
 ) -> Any:
     return await StudentService.enroll_student_by_dni(
         db=db,
@@ -151,7 +173,7 @@ async def enroll_by_s3_key(
     dni: str = Form(...),
     s3_key: str = Form(...),
     face_descriptor: str = Form(...),
-    current_user: models.User = Depends(deps.get_current_active_user),
+    current_user: models.User = Depends(deps.get_current_active_admin),
 ) -> Any:
     return await StudentService.enroll_student_by_s3_key(
         db=db,

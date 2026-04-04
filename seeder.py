@@ -20,13 +20,16 @@ def seed():
         db.close()
         return
 
-    # Check if admin exists
-    user = db.query(User).filter(User.username == admin_user).first()
-    if not user:
-        print(f"Creando usuario administrador: {admin_user}...")
+    # Mejor lógica: Solo crear el administrador inicial si NO existe NINGÚN superusuario en el sistema.
+    # Esto permite que el usuario cambie su nombre de usuario o contraseña sin que el seeder
+    # intente recrear la cuenta original cada vez que se reinicia el servidor.
+    any_superuser = db.query(User).filter(User.is_superuser == True).first()
+    
+    if not any_superuser:
+        print(f"No se encontró ningún administrador. Creando usuario inicial: {admin_user}...")
         new_admin = User(
             username=admin_user,
-            full_name="Administrador del Sistema",
+            full_name="Administrador Inicial",
             email="admin@school.com",
             hashed_password=get_password_hash(admin_password),
             is_superuser=True,
@@ -34,9 +37,9 @@ def seed():
         )
         db.add(new_admin)
         db.commit()
-        print(f"Usuario {admin_user} creado exitosamente.")
+        print(f"Usuario {admin_user} creado exitosamente como administrador inicial.")
     else:
-        print(f"El usuario administrador '{admin_user}' ya existe.")
+        print(f"El sistema ya cuenta con al menos un administrador ('{any_superuser.username}'). Saltando seeding.")
     
     db.close()
 

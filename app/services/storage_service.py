@@ -29,6 +29,8 @@ class StorageService:
         """
         Uploads a file to S3 and returns the public URL.
         """
+        from fastapi.concurrency import run_in_threadpool
+        
         s3 = StorageService._get_client()
         bucket = os.getenv("AWS_STORAGE_BUCKET_NAME")
         base_path = os.getenv("STORAGE_BASE_PATH", "eduasistencia/fotos-estudiantes")
@@ -43,12 +45,16 @@ class StorageService:
 
         try:
             content = await file.read()
-            s3.put_object(
+            content_type = file.content_type or 'image/jpeg'
+            
+            # Use run_in_threadpool to prevent blocking the async event loop with synchronous boto3 calls
+            await run_in_threadpool(
+                s3.put_object,
                 Bucket=bucket,
                 Key=key,
                 Body=content,
                 ACL='private',
-                ContentType=file.content_type or 'image/jpeg'
+                ContentType=content_type
             )
             
             return key

@@ -5,6 +5,7 @@ class UserBase(BaseModel):
     username: str
     full_name: Optional[str] = None
     email: Optional[EmailStr] = None
+    role: Optional[str] = "DOCENTE"
     is_active: Optional[bool] = True
     is_superuser: Optional[bool] = False
 
@@ -26,6 +27,7 @@ class Token(BaseModel):
     access_token: str
     token_type: str
     is_superuser: bool
+    role: Optional[str] = "DOCENTE"
 
 class TokenData(BaseModel):
     username: Optional[str] = None

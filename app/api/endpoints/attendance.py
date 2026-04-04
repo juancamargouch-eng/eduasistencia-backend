@@ -1,5 +1,5 @@
-from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, File, Form, UploadFile, Request
+from typing import Any, Optional
+from fastapi import APIRouter, Depends, HTTPException, File, Form, UploadFile, Request, Query
 from sqlalchemy.orm import Session
 from datetime import datetime
 import json
@@ -24,28 +24,43 @@ async def verify_attendance(
     dni: str = Form(None),
     face_descriptor: str = Form(...),
     event_type: str = Form("ENTRY"),
+    device_source: str = Form(None),
     file: UploadFile = File(None),
 ) -> Any:
+    # Solo permitir bypass si se envía el header secreto (para pruebas)
+    skip_bio = request.headers.get("X-Stress-Test") == "true"
+    
     return await AttendanceService.verify_attendance(
         db=db,
         qr_code=qr_code,
         dni=dni,
         face_descriptor=face_descriptor,
-        event_type=event_type
+        event_type=event_type,
+        device_source=device_source,
+        skip_biometrics=skip_bio
     )
 
-@router.get("/logs", response_model=list[schemas.AttendanceLog])
+@router.get("/logs", response_model=schemas.AttendancePagination)
 def read_attendance_logs(
     skip: int = 0,
-    limit: int = 100,
+    limit: int = 50,
     db: Session = Depends(deps.get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
-    logs = db.query(models.AttendanceLog).order_by(models.AttendanceLog.timestamp.desc()).offset(skip).limit(limit).all()
+    query = db.query(models.AttendanceLog)
+    total = query.count()
+    logs = query.order_by(models.AttendanceLog.timestamp.desc()).offset(skip).limit(limit).all()
+    
     for log in logs:
         if log.student:
             StudentService.prepare_student_response(log.student)
-    return logs
+            
+    return {
+        "total": total,
+        "items": logs,
+        "skip": skip,
+        "limit": limit
+    }
 
 @router.post("/logs/{log_id}/validate", response_model=schemas.AttendanceLog)
 async def validate_log(
@@ -56,214 +71,46 @@ async def validate_log(
 ) -> Any:
     return await AttendanceService.validate_log(db, log_id)
 
-@router.get("/stats/occupancy")
+@router.get("/stats/occupancy", response_model=schemas.OccupancyPagination)
 def get_occupancy_stats(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    grade: Optional[str] = None,
+    section: Optional[str] = None,
     db: Session = Depends(deps.get_db),
-    current_user: models.User = Depends(deps.get_current_active_user),
-) -> Any:
+    current_user: models.User = Depends(deps.get_current_active_user)
+):
     """
-    Returns the current occupancy status:
-    - total_entries: Total entry logs today
-    - total_exits: Total exit logs today
-    - current_count: students currently in campus
-    - students: List of students currently in campus (ENTRY without subsequent EXIT)
+    Retorna la ocupación en tiempo real y flujo neto del día. Solo Admin.
     """
-    from sqlalchemy import func, and_, not_, exists
-    today = datetime.now().date()
-    
-    # Subquery: Check if an EXIT exists for the student today
-    exit_exists = exists().where(
-        and_(
-            models.AttendanceLog.student_id == models.Student.id,
-            models.AttendanceLog.event_type == "EXIT",
-            models.AttendanceLog.verification_status == True,
-            func.date(models.AttendanceLog.timestamp) == today
-        )
+    return AttendanceService.get_occupancy_stats(
+        db, skip=skip, limit=limit, grade=grade, section=section
     )
 
-    # Query: Students who have an ENTRY today but NO EXIT
-    students_in_campus = db.query(models.Student).filter(
-        models.Student.is_active == True,
-        exists().where(
-            and_(
-                models.AttendanceLog.student_id == models.Student.id,
-                models.AttendanceLog.event_type == "ENTRY",
-                models.AttendanceLog.verification_status == True,
-                func.date(models.AttendanceLog.timestamp) == today
-            )
-        ),
-        not_(exit_exists)
-    ).all()
+@router.get("/stats/percentages", response_model=schemas.AttendancePercentage)
+def get_attendance_percentages(
+    period: str = Query("month", description="Filtro temporal: 'day', 'week', 'month'"),
+    db: Session = Depends(deps.get_db),
+    current_user: models.User = Depends(deps.get_current_active_user)
+):
+    """
+    Retorna los porcentajes de asistencia (Presente, Tardanza, Ausente) calculados 
+    estrictamente para el mes actual, excluyendo feriados. Solo Admin.
+    """
+    return AttendanceService.get_attendance_percentages(db=db, period=period)
 
-    # Stat counters
-    total_entries = db.query(func.count(models.AttendanceLog.id)).filter(
-        func.date(models.AttendanceLog.timestamp) == today,
-        models.AttendanceLog.event_type == "ENTRY",
-        models.AttendanceLog.verification_status == True
-    ).scalar() or 0
-    
-    total_exits = db.query(func.count(models.AttendanceLog.id)).filter(
-        func.date(models.AttendanceLog.timestamp) == today,
-        models.AttendanceLog.event_type == "EXIT",
-        models.AttendanceLog.verification_status == True
-    ).scalar() or 0
-
-    present_students = []
-    for s in students_in_campus:
-        # Prepare signed photo URL
-        s_processed = StudentService.prepare_student_response(s, for_kiosk=True)
-        
-        # Get the entry time for display
-        entry_log = db.query(models.AttendanceLog).filter(
-            models.AttendanceLog.student_id == s.id,
-            models.AttendanceLog.event_type == "ENTRY",
-            models.AttendanceLog.verification_status == True,
-            func.date(models.AttendanceLog.timestamp) == today
-        ).order_by(models.AttendanceLog.timestamp.desc()).first()
-        
-        # Manual dict construction to avoid .dict() crash on SQLAlchemy model
-        student_data = {
-            "id": s_processed.id,
-            "first_name": s_processed.first_name,
-            "last_name": s_processed.last_name,
-            "full_name": s_processed.full_name,
-            "photo_url": s_processed.photo_url,
-            "grade": s_processed.grade,
-            "section": s_processed.section,
-            "dni": s_processed.dni,
-            "entry_time": entry_log.timestamp.isoformat() if entry_log else None
-        }
-        present_students.append(student_data)
-
-    return {
-        "total_entries": total_entries,
-        "total_exits": total_exits,
-        "current_count": len(present_students),
-        "students": present_students
-    }
-
-@router.get("/daily-status")
+@router.get("/daily-status", response_model=schemas.DailyAttendancePagination)
 def get_daily_attendance_status(
     grade: str,
     section: str,
+    skip: int = 0,
+    limit: int = 50,
     schedule_id: int = None,
     date_str: str = None, # YYYY-MM-DD
     db: Session = Depends(deps.get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
-    try:
-        from datetime import date
-        from sqlalchemy import func
-        
-        # 1. Parse Date
-        if date_str:
-            try:
-                query_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-            except ValueError:
-                raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
-        else:
-            query_date = datetime.now().date()
-
-        # 2. Check Holiday/Weekend (Peru)
-        is_weekend = query_date.weekday() >= 5 # 5=Sat, 6=Sun
-        
-        # Simple hardcoded list for 2024-2026 (Extend as needed or move to DB/Config)
-        holidays_pe = {
-            (1, 1): "Año Nuevo",
-            (5, 1): "Día del Trabajo",
-            (6, 29): "San Pedro y San Pablo",
-            (7, 28): "Fiestas Patrias",
-            (7, 29): "Fiestas Patrias",
-            (8, 6): "Batalla de Junín",
-            (8, 30): "Santa Rosa de Lima",
-            (10, 8): "Combate de Angamos",
-            (11, 1): "Día de Todos los Santos",
-            (12, 8): "Inmaculada Concepción",
-            (12, 9): "Batalla de Ayacucho",
-            (12, 25): "Navidad"
-        }
-        
-        holiday_name = holidays_pe.get((query_date.month, query_date.day))
-        is_non_working_day = is_weekend or (holiday_name is not None)
-        
-        # 3. Fetch Students with optional schedule filter
-        query = db.query(models.Student).filter(
-            models.Student.grade == grade,
-            models.Student.section == section,
-            models.Student.is_active == True
-        )
-        
-        if schedule_id:
-            query = query.filter(models.Student.schedule_id == schedule_id)
-            
-        students = query.all()
-        
-        # 4. Fetch Logs for that day
-        # We want successful entries primarily
-        logs = db.query(models.AttendanceLog).filter(
-            models.AttendanceLog.verification_status == True,
-            models.AttendanceLog.event_type == "ENTRY", # Only care about arriving for "Present"
-            func.date(models.AttendanceLog.timestamp) == query_date
-        ).all()
-        
-        # Create a map of student_id -> log
-        logs_map = {log.student_id: log for log in logs}
-        
-        results = []
-        
-        present_count = 0
-        late_count = 0
-        absent_count = 0
-        
-        for student in students:
-            log = logs_map.get(student.id)
-            status = "ABSENT"
-            entry_time = None
-            
-            if log:
-                status = log.status # Get real status (PRESENT or LATE)
-                if status == "LATE":
-                    late_count += 1
-                else:
-                    present_count += 1
-                entry_time = log.timestamp
-            else:
-                absent_count += 1
-                
-            schedule_info = None
-            if student.schedule:
-                schedule_info = {
-                     "id": student.schedule.id,
-                     "name": student.schedule.name,
-                     "start_time": student.schedule.start_time.strftime("%H:%M") if student.schedule.start_time else None
-                }
-
-            results.append({
-                "id": student.id,
-                "full_name": student.full_name,
-                "photo_url": StudentService.prepare_student_response(student).photo_url,
-                "status": status,
-                "entry_time": entry_time,
-                "schedule": schedule_info
-            })
-            
-        return {
-            "date": query_date.isoformat(),
-            "is_non_working_day": is_non_working_day,
-            "holiday_name": "Fin de Semana" if is_weekend and not holiday_name else holiday_name,
-            "summary": {
-                "total": len(students),
-                "present": present_count,
-                "late": late_count,
-                "absent": absent_count
-            },
-            "students": results
-        }
-    except Exception as e:
-        print(f"ERROR in daily-status: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=400, detail=f"Server Error: {str(e)}")
+    return AttendanceService.get_daily_status(db, grade, section, skip, limit, schedule_id, date_str)
 @router.get("/student/{dni}/absences")
 def get_student_absences(
     dni: str,
@@ -271,175 +118,10 @@ def get_student_absences(
     db: Session = Depends(deps.get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
-    from datetime import date, timedelta
-    from sqlalchemy import func
-    
-    # 1. Find Student
-    student = db.query(models.Student).filter(models.Student.dni == dni).first()
-    if not student:
-        raise HTTPException(status_code=404, detail="Estudiante no encontrado")
-        
-    # 2. Define Range (e.g., last 30 days)
-    today = date.today()
-    start_date = today - timedelta(days=days_back)
-    
-    # 3. Get all logs in range
-    logs = db.query(models.AttendanceLog).filter(
-        models.AttendanceLog.student_id == student.id,
-        models.AttendanceLog.verification_status == True,
-        models.AttendanceLog.event_type == "ENTRY",
-        models.AttendanceLog.timestamp >= start_date
-    ).all()
-    
-    # Set of dates with attendance
-    attendance_dates = {log.timestamp.date() for log in logs}
-    
-    # 4. Get all justifications in range
-    justifications = db.query(models.Justification).filter(
-        models.Justification.student_id == student.id,
-        models.Justification.date >= start_date
-    ).all()
-    
-    justification_dates = {j.date for j in justifications}
-    
-    # 5. Calculate Absences
-    absences = []
-    
-    # Iterate from start_date to yesterday (today is not an absence yet unless day is over, keep simple)
-    current_date = start_date
-    while current_date < today:
-        # Check Weekend
-        if current_date.weekday() >= 5: # Sat/Sun
-            current_date += timedelta(days=1)
-            continue
-            
-        # Check Holidays (Reuse hardcoded list for MVP)
-        holidays_pe = {
-            (1, 1), (5, 1), (6, 29), (7, 28), (7, 29),
-            (8, 6), (8, 30), (10, 8), (11, 1), (12, 8), (12, 9), (12, 25)
-        }
-        if (current_date.month, current_date.day) in holidays_pe:
-            current_date += timedelta(days=1)
-            continue
-            
-        # Check if attended or justified
-        if current_date not in attendance_dates and current_date not in justification_dates:
-            absences.append({
-                "date": current_date.isoformat(),
-                "day_name": current_date.strftime("%A"), # English for now, can localize
-                "status": "UNJUSTIFIED"
-            })
-            
-        current_date += timedelta(days=1)
-        
-    return {
-        "student": {
-            "id": student.id,
-            "full_name": student.full_name,
-            "grade": student.grade,
-            "section": student.section,
-            "photo_url": StudentService.prepare_student_response(student).photo_url,
-            "schedule": {
-                "name": student.schedule.name,
-                "start_time": student.schedule.start_time.strftime("%H:%M")
-            } if student.schedule else None
-        },
-        "absences": absences
-    }
+    return AttendanceService.get_student_absences(db, dni, days_back)
 @router.get("/stats/monthly")
 def get_monthly_stats(
     db: Session = Depends(deps.get_db),
     current_user: models.User = Depends(deps.get_current_active_user),
 ) -> Any:
-    from datetime import date, timedelta
-    from sqlalchemy import func
-    
-    # 1. Define Range (Last 30 days)
-    today = date.today()
-    start_date = today - timedelta(days=29) # Total 30 days including today
-    
-    # 2. Get active students count
-    total_students = db.query(func.count(models.Student.id)).filter(models.Student.is_active == True).scalar() or 0
-    
-    # 3. Get all logs in range
-    logs = db.query(
-        func.date(models.AttendanceLog.timestamp).label('date'),
-        models.AttendanceLog.status,
-        func.count(models.AttendanceLog.id).label('count')
-    ).filter(
-        models.AttendanceLog.verification_status == True,
-        models.AttendanceLog.event_type == "ENTRY",
-        models.AttendanceLog.timestamp >= start_date
-    ).group_by(
-        func.date(models.AttendanceLog.timestamp),
-        models.AttendanceLog.status
-    ).all()
-    
-    # Organize logs by date
-    daily_data = {}
-    current_dt = start_date
-    while current_dt <= today:
-        # Check if it's a non-working day (simple check)
-        is_weekend = current_dt.weekday() >= 5
-        holidays_pe = {
-            (1, 1), (5, 1), (6, 29), (7, 28), (7, 29),
-            (8, 6), (8, 30), (10, 8), (11, 1), (12, 8), (12, 9), (12, 25)
-        }
-        is_holiday = (current_dt.month, current_dt.day) in holidays_pe
-        
-        if not (is_weekend or is_holiday):
-            daily_data[current_dt.isoformat()] = {
-                "date": current_dt.strftime("%d/%m"),
-                "full_date": current_dt.isoformat(),
-                "present": 0,
-                "late": 0,
-                "absent": total_students
-            }
-        current_dt += timedelta(days=1)
-        
-    # Fill with real data
-    for log_date, status, count in logs:
-        date_str = log_date.isoformat() if hasattr(log_date, 'isoformat') else str(log_date)
-        if date_str in daily_data:
-            if status == "PRESENT":
-                daily_data[date_str]["present"] += count
-                daily_data[date_str]["absent"] -= count
-            elif status == "LATE":
-                daily_data[date_str]["late"] += count
-                daily_data[date_str]["absent"] -= count
-                
-    # 4. Breakdown by Grade (Current Day or Monthly Avg)
-    grade_stats = db.query(
-        models.Student.grade,
-        models.AttendanceLog.status,
-        func.count(models.AttendanceLog.id)
-    ).join(models.AttendanceLog, models.Student.id == models.AttendanceLog.student_id).filter(
-        models.AttendanceLog.verification_status == True,
-        models.AttendanceLog.event_type == "ENTRY",
-        models.AttendanceLog.timestamp >= start_date
-    ).group_by(models.Student.grade, models.AttendanceLog.status).all()
-    
-    # Calculate performance by grade
-    grades_perf = {}
-    for grade, status, count in grade_stats:
-        if grade not in grades_perf:
-            # Get total students in this grade
-            count_in_grade = db.query(func.count(models.Student.id)).filter(
-                models.Student.grade == grade,
-                models.Student.is_active == True
-            ).scalar() or 1
-            grades_perf[grade] = {"name": grade, "present": 0, "late": 0, "total": count_in_grade}
-            
-        if status == "PRESENT":
-            grades_perf[grade]["present"] += count
-        elif status == "LATE":
-            grades_perf[grade]["late"] += count
-
-    return {
-        "daily": sorted(list(daily_data.values()), key=lambda x: x["full_date"]),
-        "grades": sorted(list(grades_perf.values()), key=lambda x: x["name"]),
-        "summary": {
-            "total_students": total_students,
-            "period_days": len(daily_data)
-        }
-    }
+    return AttendanceService.get_monthly_stats(db)

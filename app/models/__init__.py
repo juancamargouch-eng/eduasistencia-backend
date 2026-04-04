@@ -5,3 +5,6 @@ from .schedule import Schedule
 from .justification import Justification
 from .device import Device
 from .telegram import TelegramConfig
+from .assignment import Assignment
+from .announcement import Announcement
+from .module_permission import ModulePermission

@@ -49,3 +49,18 @@ async def get_current_active_superuser(current_user: User = Depends(get_current_
             status_code=400, detail="El usuario no tiene suficientes privilegios"
         )
     return current_user
+
+async def get_current_active_docente(current_user: User = Depends(get_current_user)):
+    if current_user.role not in ["ADMIN", "DOCENTE", "DIRECTOR"] and not current_user.is_superuser:
+        raise HTTPException(
+            status_code=403, detail="El usuario no tiene permisos de docente"
+        )
+    return current_user
+
+async def get_current_active_admin(current_user: User = Depends(get_current_user)):
+    """Requiere ser ADMIN o DIRECTOR para acceder."""
+    if current_user.role not in ["ADMIN", "DIRECTOR"] and not current_user.is_superuser:
+        raise HTTPException(
+            status_code=403, detail="Esta acción requiere privilegios de Administrador o Director"
+        )
+    return current_user

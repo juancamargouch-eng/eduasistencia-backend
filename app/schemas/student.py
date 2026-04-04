@@ -62,3 +62,9 @@ class Student(StudentBase):
 
     class Config:
         from_attributes = True
+
+class StudentPagination(BaseModel):
+    total: int
+    items: List[Student]
+    skip: int
+    limit: int

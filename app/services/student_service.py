@@ -76,8 +76,7 @@ class StudentService:
         grade = grade.strip().upper()
         section = section.strip().upper()
         try:
-            encoding = json.loads(face_descriptor)
-            if not isinstance(encoding, list) or len(encoding) != 128:
+            if not isinstance(encoding, list) or len(encoding) != 224:
                 raise ValueError("Formato de descriptor inválido")
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Descriptor facial inválido: {str(e)}")
@@ -188,7 +187,7 @@ class StudentService:
         if face_descriptor:
             try:
                 encoding = json.loads(face_descriptor)
-                if isinstance(encoding, list) and len(encoding) == 128:
+                if isinstance(encoding, list) and len(encoding) == 224:
                     student.face_encoding = encoding
             except:
                 pass
@@ -316,7 +315,7 @@ class StudentService:
             
         try:
             encoding = json.loads(face_descriptor)
-            if not isinstance(encoding, list) or len(encoding) != 128:
+            if not isinstance(encoding, list) or len(encoding) != 224:
                 raise ValueError("Formato de descriptor inválido")
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Descriptor facial inválido: {str(e)}")
