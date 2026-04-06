@@ -19,8 +19,8 @@ class AnnouncementUpdate(BaseModel):
 
 class Announcement(AnnouncementBase):
     id: int
-    author_id: int
-    created_at: datetime
+    author_id: Optional[int] = None
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

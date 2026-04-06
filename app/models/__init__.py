@@ -8,3 +8,4 @@ from .telegram import TelegramConfig
 from .assignment import Assignment
 from .announcement import Announcement
 from .module_permission import ModulePermission
+from .academic import Course, AcademicPeriod, EvaluationCriteria, TeacherAssignment, Grade, AcademicSetting

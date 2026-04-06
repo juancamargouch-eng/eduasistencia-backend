@@ -1,0 +1,20 @@
+﻿Alumno: CAMACHO, JOAN
+Timestamp de entrada: 2026-04-05 16:16:31.554220-05:00
+Tipo de timestamp: <class 'datetime.datetime'>
+Timezone info: UTC-05:00
+
+--- PRUEBA 1: Resta de datetime (lÝnea 81 del servicio) ---
+ERROR ENCONTRADO: can't subtract offset-naive and offset-aware datetimes
+CAUSA RA═Z: datetime.now() no tiene timezone, pero el timestamp de la DB sÝ.
+SOLUCIËN: Usar datetime.now(existing_entry.timestamp.tzinfo) o .replace(tzinfo=None)
+
+--- PRUEBA 2: Generaci¾n de photo_url para el modal ---
+OK: photo_url = /api/students/photo-proxy?key=eduasistencia/fotos-estudiantes/a4738e91-c354-4e0d-a955-ee7ac8d84393.jpg&sig=55d317dfb056e8a68aab60f2ee2c443b4e03dd174db58d7be253971cfbd0373d
+
+--- PRUEBA 3: Serializaci¾n del detalle del error 409 ---
+OK: JSON serializable. Longitud: 295 chars
+
+--- PRUEBA 4: Validaci¾n Pydantic de AttendanceLogKiosk ---
+OK: Pydantic validation passed
+
+=== DIAGNËSTICO COMPLETO ===

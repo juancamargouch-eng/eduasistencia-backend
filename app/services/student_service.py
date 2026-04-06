@@ -15,40 +15,65 @@ from app.models.telegram import TelegramConfig
 
 class StudentService:
     @staticmethod
-    def prepare_student_response(student: models.Student, for_kiosk: bool = False) -> models.Student:
+    def prepare_student_response(student: models.Student, for_kiosk: bool = False) -> dict:
         """
-        Signs the photo_url if it's an S3 key or a legacy Linode URL.
-        Uses HMAC signature for ALL proxy URLs because <img> tags cannot send headers.
+        Calculates a signed photo_url without modifying the persistent database object.
+        Returns a dictionary for safe JSON serialization.
         """
-        if student and student.photo_url:
-            key = student.photo_url
+        if not student:
+            return None
             
+        # Extract base photo_url
+        photo_url = getattr(student, 'photo_url', "")
+        
+        if photo_url:
             # If it's a full legacy URL, extract the key
-            if key.startswith("http"):
+            if isinstance(photo_url, str) and photo_url.startswith("http"):
                 bucket = os.getenv("AWS_STORAGE_BUCKET_NAME", "pegasus")
                 endpoint = os.getenv("AWS_S3_ENDPOINT_URL", "").replace("https://", "")
-                
-                # Check if it's our bucket
                 marker = f"{bucket}.{endpoint}/"
-                if marker in key:
-                    key = key.split(marker)[1]
-                else:
-                    # If it's a different HTTP link, leave it as is
-                    return student
+                if marker in photo_url:
+                    photo_url = photo_url.split(marker)[1]
             
             # Convert key to signed proxy URL
-            student.photo_url = StorageService.get_signed_proxy_url(key)
+            photo_url = StorageService.get_signed_proxy_url(photo_url)
             
-        return student
+        # Return a dictionary instead of a Pydantic object for maximum stability
+        # in exception details and WebSocket broadcasts.
+        if for_kiosk:
+            return {
+                "first_name": getattr(student, 'first_name', ""),
+                "last_name": getattr(student, 'last_name', ""),
+                "full_name": getattr(student, 'full_name', ""),
+                "grade": getattr(student, 'grade', ""),
+                "section": getattr(student, 'section', ""),
+                "photo_url": photo_url
+            }
+        
+        # Default full response for regular API
+        return {
+            "id": getattr(student, 'id', None),
+            "first_name": getattr(student, 'first_name', ""),
+            "last_name": getattr(student, 'last_name', ""),
+            "full_name": getattr(student, 'full_name', ""),
+            "dni": getattr(student, 'dni', ""),
+            "grade": getattr(student, 'grade', ""),
+            "section": getattr(student, 'section', ""),
+            "photo_url": photo_url,
+            "qr_code_hash": getattr(student, 'qr_code_hash', ""),
+            "is_active": getattr(student, 'is_active', True),
+            "created_at": getattr(student, 'created_at', None),
+            "schedule_id": getattr(student, 'schedule_id', None),
+            "telegram_chat_id": getattr(student, 'telegram_chat_id', None),
+            "notify_telegram": getattr(student, 'notify_telegram', True)
+        }
 
     @staticmethod
-    def prepare_students_response(students: List[models.Student], for_kiosk: bool = False) -> List[models.Student]:
+    def prepare_students_response(students: List[models.Student], for_kiosk: bool = False) -> List[dict]:
         """
-        Signs photo_urls for a list of students.
+        Signs photo_urls for a list of students and returns a list of dictionaries.
         """
-        for s in students:
-            StudentService.prepare_student_response(s, for_kiosk)
-        return students
+        return [StudentService.prepare_student_response(s, for_kiosk) for s in students]
 
     @staticmethod
     async def create_student(
@@ -75,9 +100,11 @@ class StudentService:
         # Grade: UPPERCASE and clean
         grade = grade.strip().upper()
         section = section.strip().upper()
+        # Face Descriptor: Parse JSON
         try:
-            if not isinstance(encoding, list) or len(encoding) != 224:
-                raise ValueError("Formato de descriptor inválido")
+            encoding = json.loads(face_descriptor)
+            if not isinstance(encoding, list) or len(encoding) != 128:
+                raise ValueError("El descriptor debe ser una lista de 128 números")
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Descriptor facial inválido: {str(e)}")
 
@@ -187,7 +214,7 @@ class StudentService:
         if face_descriptor:
             try:
                 encoding = json.loads(face_descriptor)
-                if isinstance(encoding, list) and len(encoding) == 224:
+                if isinstance(encoding, list) and len(encoding) == 128:
                     student.face_encoding = encoding
             except:
                 pass
@@ -315,8 +342,8 @@ class StudentService:
             
         try:
             encoding = json.loads(face_descriptor)
-            if not isinstance(encoding, list) or len(encoding) != 224:
-                raise ValueError("Formato de descriptor inválido")
+            if not isinstance(encoding, list) or len(encoding) != 128:
+                raise ValueError("El descriptor debe ser una lista de 128 números")
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Descriptor facial inválido: {str(e)}")
 

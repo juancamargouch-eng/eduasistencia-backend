@@ -5,3 +5,11 @@ from .telegram import TelegramConfig, TelegramConfigCreate, TelegramConfigBase, 
 from .assignment import Assignment, AssignmentCreate, AssignmentUpdate
 from .announcement import Announcement, AnnouncementCreate, AnnouncementUpdate
 from .module_permission import ModulePermission, ModulePermissionBase
+from .academic import (
+    CourseBase, CourseCreate, CourseUpdate, CourseResponse,
+    AcademicPeriodBase, AcademicPeriodCreate, AcademicPeriodUpdate, AcademicPeriodResponse,
+    EvaluationCriteriaBase, EvaluationCriteriaCreate, EvaluationCriteriaUpdate, EvaluationCriteriaResponse,
+    TeacherAssignmentBase, TeacherAssignmentCreate, TeacherAssignmentUpdate, TeacherAssignmentResponse,
+    GradeBase, GradeCreate, GradeResponse, BulkGradeUpload,
+    AcademicSettingBase, AcademicSettingCreate, AcademicSettingUpdate, AcademicSettingResponse
+)

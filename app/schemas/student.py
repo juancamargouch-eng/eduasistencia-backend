@@ -3,21 +3,21 @@ from typing import Optional, List
 from datetime import datetime
 
 class StudentBase(BaseModel):
-    first_name: str
-    last_name: str
-    full_name: Optional[str] = None
-    grade: str
-    section: str
+    first_name: Optional[str] = ""
+    last_name: Optional[str] = ""
+    full_name: Optional[str] = ""
+    grade: Optional[str] = ""
+    section: Optional[str] = ""
     telegram_chat_id: Optional[str] = None
     telegram_user_id: Optional[str] = None
-    notify_telegram: bool = True
+    notify_telegram: Optional[bool] = True
 
 class StudentKiosk(BaseModel):
-    first_name: str
-    last_name: str
-    full_name: str
-    grade: str
-    section: str
+    first_name: Optional[str] = ""
+    last_name: Optional[str] = ""
+    full_name: Optional[str] = ""
+    grade: Optional[str] = ""
+    section: Optional[str] = ""
     photo_url: Optional[str] = None
 
     class Config:
@@ -25,12 +25,12 @@ class StudentKiosk(BaseModel):
 
 class StudentSummary(BaseModel):
     id: int
-    first_name: str
-    last_name: str
-    full_name: str
+    first_name: Optional[str] = ""
+    last_name: Optional[str] = ""
+    full_name: Optional[str] = ""
     dni: Optional[str] = None
-    grade: str
-    section: str
+    grade: Optional[str] = ""
+    section: Optional[str] = ""
 
     class Config:
         from_attributes = True
@@ -53,9 +53,9 @@ class StudentUpdate(BaseModel):
 
 class Student(StudentBase):
     id: int
-    qr_code_hash: str
-    is_active: bool
-    created_at: datetime
+    qr_code_hash: Optional[str] = ""
+    is_active: Optional[bool] = True
+    created_at: Optional[datetime] = None
     photo_url: Optional[str] = None
     dni: Optional[str] = None
     schedule_id: Optional[int] = None

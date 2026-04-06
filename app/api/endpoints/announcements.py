@@ -1,9 +1,10 @@
 from typing import Any, List
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app import models, schemas
 from app.api import deps
+from app.services.telegram_service import TelegramService
 
 router = APIRouter()
 
@@ -24,6 +25,7 @@ def read_announcements(
 async def create_announcement(
     *,
     db: Session = Depends(deps.get_db),
+    background_tasks: BackgroundTasks,
     announcement_in: schemas.announcement.AnnouncementCreate,
     current_user: models.User = Depends(deps.get_current_active_docente),
 ) -> Any:
@@ -38,7 +40,8 @@ async def create_announcement(
     db.commit()
     db.refresh(announcement)
     
-    # Pendiente: Integración con Telegram aquí si se confirma
+    # 3. Disparar Difusión en Telegram (Asíncrono)
+    background_tasks.add_task(TelegramService.broadcast_announcement, db, announcement.id)
     
     return announcement
 

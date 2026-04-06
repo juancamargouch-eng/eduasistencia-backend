@@ -65,7 +65,7 @@ async def create_student(
     notify_telegram: bool = Form(True),
     current_user: models.User = Depends(deps.get_current_active_admin),
 ) -> Any:
-    return await StudentService.create_student(
+    student = await StudentService.create_student(
         db=db,
         first_name=first_name,
         last_name=last_name,
@@ -78,6 +78,7 @@ async def create_student(
         telegram_chat_id=telegram_chat_id,
         notify_telegram=notify_telegram
     )
+    return StudentService.prepare_student_response(student)
 
 @router.put("/{student_id}", response_model=schemas.Student)
 async def update_student(
@@ -150,12 +151,13 @@ async def enroll_by_dni(
     face_descriptor: str = Form(...),
     current_user: models.User = Depends(deps.get_current_active_admin),
 ) -> Any:
-    return await StudentService.enroll_student_by_dni(
+    student = await StudentService.enroll_student_by_dni(
         db=db,
         dni=dni,
         file=file,
         face_descriptor=face_descriptor
     )
+    return StudentService.prepare_student_response(student)
 
 @router.post("/check-photos")
 async def check_photos(
@@ -175,12 +177,13 @@ async def enroll_by_s3_key(
     face_descriptor: str = Form(...),
     current_user: models.User = Depends(deps.get_current_active_admin),
 ) -> Any:
-    return await StudentService.enroll_student_by_s3_key(
+    student = await StudentService.enroll_student_by_s3_key(
         db=db,
         dni=dni,
         s3_key=s3_key,
         face_descriptor=face_descriptor
     )
+    return StudentService.prepare_student_response(student)
 @router.get("/photo-proxy")
 async def photo_proxy(
     key: str,

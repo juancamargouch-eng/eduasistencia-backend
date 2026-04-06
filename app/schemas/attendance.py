@@ -16,9 +16,9 @@ from .student import Student, StudentKiosk, StudentSummary
 
 class AttendanceLog(AttendanceLogBase):
     id: int
-    timestamp: datetime
-    event_type: str
-    status: str
+    timestamp: Optional[datetime] = None
+    event_type: Optional[str] = None
+    status: Optional[str] = None
     student: Optional[Student] = None
 
     class Config:
@@ -28,12 +28,12 @@ class AttendanceLog(AttendanceLogBase):
 class AttendanceLogKiosk(BaseModel):
     id: int
     timestamp: datetime
-    verification_status: bool
+    verification_status: bool = False
     failure_reason: Optional[str] = None
     device_source: Optional[str] = None
-    event_type: str
+    event_type: Optional[str] = "ENTRY"
 
-    status: str
+    status: Optional[str] = "PRESENT"
     student: Optional[StudentKiosk] = None
 
     class Config:
@@ -47,9 +47,9 @@ class AttendancePagination(BaseModel):
 
 class DailyAttendanceStudent(BaseModel):
     id: int
-    full_name: str
+    full_name: Optional[str] = ""
     photo_url: Optional[str] = None
-    status: str
+    status: Optional[str] = ""
     entry_time: Optional[datetime] = None
 
 class DailyAttendanceSummary(BaseModel):

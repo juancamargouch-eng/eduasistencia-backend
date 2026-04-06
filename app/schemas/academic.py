@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 from typing import Optional, List
 from datetime import date, datetime
 
@@ -16,7 +16,8 @@ class AcademicSettingResponse(AcademicSettingBase):
     id: int
     updated_at: Optional[datetime] = None
 
-    model_config = ConfigDict(from_attributes=True)
+    class Config:
+        from_attributes = True
 
 # Courses
 class CourseBase(BaseModel):
@@ -32,7 +33,8 @@ class CourseUpdate(CourseBase):
 class CourseResponse(CourseBase):
     id: int
 
-    model_config = ConfigDict(from_attributes=True)
+    class Config:
+        from_attributes = True
 
 # Academic Periods
 class AcademicPeriodBase(BaseModel):
@@ -53,7 +55,8 @@ class AcademicPeriodUpdate(BaseModel):
 class AcademicPeriodResponse(AcademicPeriodBase):
     id: int
 
-    model_config = ConfigDict(from_attributes=True)
+    class Config:
+        from_attributes = True
 
 # Evaluation Criteria
 class EvaluationCriteriaBase(BaseModel):
@@ -72,7 +75,8 @@ class EvaluationCriteriaUpdate(BaseModel):
 class EvaluationCriteriaResponse(EvaluationCriteriaBase):
     id: int
 
-    model_config = ConfigDict(from_attributes=True)
+    class Config:
+        from_attributes = True
 
 # Teacher Assignments
 class TeacherAssignmentBase(BaseModel):
@@ -91,7 +95,8 @@ class TeacherAssignmentUpdate(BaseModel):
 class TeacherAssignmentResponse(TeacherAssignmentBase):
     id: int
 
-    model_config = ConfigDict(from_attributes=True)
+    class Config:
+        from_attributes = True
 
 # Grades
 class GradeBase(BaseModel):
@@ -108,7 +113,8 @@ class GradeResponse(GradeBase):
     id: int
     created_at: Optional[datetime] = None
 
-    model_config = ConfigDict(from_attributes=True)
+    class Config:
+        from_attributes = True
 
 class BulkGradeUpload(BaseModel):
     grades: List[GradeCreate]

@@ -18,9 +18,10 @@ class AttendanceService:
         dni: Optional[str] = None,
         face_descriptor: str = "",
         event_type: Optional[str] = None,
+        event_type_override: Optional[str] = None,
         device_source: Optional[str] = None,
         skip_biometrics: bool = False
-    ) -> models.AttendanceLog:
+    ) -> dict:
         # 1. Look up student
         student = None
         if qr_code:
@@ -46,8 +47,9 @@ class AttendanceService:
             func.date(models.AttendanceLog.timestamp) == today
         ).first()
 
-        current_event_type = "ENTRY"
-        if existing_entry:
+        current_event_type = event_type_override or "ENTRY"
+        
+        if not event_type_override and existing_entry:
             # Si ya hay entrada, verificar salida
             existing_exit = db.query(models.AttendanceLog).filter(
                 models.AttendanceLog.student_id == student.id,
@@ -58,25 +60,43 @@ class AttendanceService:
 
             if existing_exit:
                 from fastapi import HTTPException
+                
+                # Safe date formatting
+                entry_time = existing_entry.timestamp.strftime('%H:%M') if hasattr(existing_entry.timestamp, 'strftime') else str(existing_entry.timestamp)
+                exit_time = existing_exit.timestamp.strftime('%H:%M') if hasattr(existing_exit.timestamp, 'strftime') else str(existing_exit.timestamp)
+                
                 raise HTTPException(
                     status_code=409,
                     detail={
                         "message": "Jornada completada por hoy",
-                        "timestamp": f"E: {existing_entry.timestamp.strftime('%H:%M')} | S: {existing_exit.timestamp.strftime('%H:%M')}",
-                        "student": StudentService.prepare_student_response(student, for_kiosk=True).dict()
+                        "timestamp": f"E: {entry_time} | S: {exit_time}",
+                        "student": {
+                            "full_name": getattr(student, 'full_name', "Estudiante"),
+                            "photo_url": StudentService.prepare_student_response(student, for_kiosk=True).get("photo_url", "")
+                        }
                     }
                 )
 
             # BLOQUEO DE 2 HORAS (Cool-down)
-            time_diff = datetime.now() - existing_entry.timestamp
+            # IMPORTANTE: PostgreSQL retorna TIMESTAMP WITH TIMEZONE (offset-aware).
+            # datetime.now() es offset-naive. Se debe usar la misma timezone para restar.
+            now_aware = datetime.now(existing_entry.timestamp.tzinfo)
+            time_diff = now_aware - existing_entry.timestamp
             if time_diff < timedelta(hours=2):
                 from fastapi import HTTPException
+                
+                # Safe date formatting
+                entry_time = existing_entry.timestamp.strftime("%H:%M:%S") if hasattr(existing_entry.timestamp, 'strftime') else str(existing_entry.timestamp)
+                
                 raise HTTPException(
                     status_code=409,
                     detail={
                         "message": "Ya marcó su entrada",
-                        "timestamp": existing_entry.timestamp.strftime("%H:%M:%S"),
-                        "student": StudentService.prepare_student_response(student, for_kiosk=True).dict()
+                        "timestamp": entry_time,
+                        "student": {
+                            "full_name": getattr(student, 'full_name', "Estudiante"),
+                            "photo_url": StudentService.prepare_student_response(student, for_kiosk=True).get("photo_url", "")
+                        }
                     }
                 )
             
@@ -139,13 +159,16 @@ class AttendanceService:
         if verification_status:
             await TelegramService.send_attendance_notification(db, student, log)
             
-        # 8. Broadcast via WebSocket
+        # 8. Prepare Student Data for response
+        prepared_student = StudentService.prepare_student_response(student, for_kiosk=True)
+            
+        # 9. Broadcast via WebSocket
         await manager.broadcast({
             "event": "new_attendance",
             "data": {
                 "id": log.id,
                 "student_name": student.full_name,
-                "photo_url": StudentService.prepare_student_response(student, for_kiosk=True).photo_url,
+                "photo_url": prepared_student.get("photo_url", ""),
                 "status": log.status,
                 "event_type": log.event_type,
                 "timestamp": log.timestamp.isoformat(),
@@ -154,7 +177,17 @@ class AttendanceService:
             }
         })
         
-        return log
+        # 10. Return serialized dictionary compatible with AttendanceLogKiosk
+        return {
+            "id": log.id,
+            "timestamp": log.timestamp,
+            "verification_status": log.verification_status,
+            "failure_reason": log.failure_reason,
+            "device_source": log.device_source,
+            "event_type": log.event_type,
+            "status": log.status,
+            "student": prepared_student
+        }
 
     @staticmethod
     async def validate_log(db: Session, log_id: int) -> models.AttendanceLog:
@@ -271,14 +304,14 @@ class AttendanceService:
         for student, entry_time in results:
             s_processed = StudentService.prepare_student_response(student, for_kiosk=True)
             present_students.append({
-                "id": s_processed.id,
-                "first_name": s_processed.first_name,
-                "last_name": s_processed.last_name,
-                "full_name": s_processed.full_name,
-                "photo_url": s_processed.photo_url,
-                "grade": s_processed.grade,
-                "section": s_processed.section,
-                "dni": s_processed.dni,
+                "id": student.id,
+                "first_name": s_processed.get("first_name", ""),
+                "last_name": s_processed.get("last_name", ""),
+                "full_name": s_processed.get("full_name", ""),
+                "photo_url": s_processed.get("photo_url", ""),
+                "grade": s_processed.get("grade", ""),
+                "section": s_processed.get("section", ""),
+                "dni": getattr(student, 'dni', ""),
                 "entry_time": entry_time
             })
 
@@ -370,7 +403,7 @@ class AttendanceService:
             results.append({
                 "id": s.id,
                 "full_name": s.full_name,
-                "photo_url": StudentService.prepare_student_response(s).photo_url,
+                "photo_url": StudentService.prepare_student_response(s).get("photo_url", ""),
                 "status": status,
                 "entry_time": entry_time
             })
@@ -460,6 +493,7 @@ class AttendanceService:
             "grades": sorted(list(grades_perf.values()), key=lambda x: x["name"]),
             "summary": {"total_students": total_students, "period_days": len(daily_data)}
         }
+
 
     @staticmethod
     def get_attendance_percentages(db: Session, period: str):
@@ -596,7 +630,7 @@ class AttendanceService:
                 "full_name": student.full_name,
                 "grade": student.grade,
                 "section": student.section,
-                "photo_url": StudentService.prepare_student_response(student).photo_url,
+                "photo_url": StudentService.prepare_student_response(student).get("photo_url", ""),
                 "schedule": {"name": student.schedule.name, "start_time": student.schedule.start_time.strftime("%H:%M")} if student.schedule else None
             },
             "absences": absences

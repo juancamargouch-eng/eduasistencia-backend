@@ -51,13 +51,26 @@ def read_attendance_logs(
     total = query.count()
     logs = query.order_by(models.AttendanceLog.timestamp.desc()).offset(skip).limit(limit).all()
     
+    items_out = []
     for log in logs:
-        if log.student:
-            StudentService.prepare_student_response(log.student)
+        # Map to dict to include the signed student photo_url safely
+        log_data = {
+            "id": log.id,
+            "student_id": log.student_id,
+            "verification_status": log.verification_status,
+            "confidence_score": log.confidence_score,
+            "failure_reason": log.failure_reason,
+            "device_source": log.device_source,
+            "timestamp": log.timestamp,
+            "event_type": log.event_type,
+            "status": log.status,
+            "student": StudentService.prepare_student_response(log.student) if log.student else None
+        }
+        items_out.append(log_data)
             
     return {
         "total": total,
-        "items": logs,
+        "items": items_out,
         "skip": skip,
         "limit": limit
     }

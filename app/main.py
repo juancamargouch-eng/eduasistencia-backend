@@ -17,13 +17,13 @@ from slowapi.errors import RateLimitExceeded
 # Import models to ensure they are registered with Base
 from .models import * 
 
-# MIGRACIONES AUTOMÁTICAS: Sincroniza la base de datos profesionalmente al iniciar
-from alembic.config import Config
-from alembic import command
-from seeder import seed  # Importar el seeder
-
 def run_migrations_and_seed():
     try:
+        # MIGRACIONES AUTOMÁTICAS: Sincroniza la base de datos profesionalmente al iniciar
+        from alembic.config import Config
+        from alembic import command
+        from seeder import seed  # Importar el seeder
+
         print("Revisando y aplicando migraciones de base de datos...")
         alembic_cfg = Config("alembic.ini")
         command.upgrade(alembic_cfg, "head")
@@ -32,6 +32,8 @@ def run_migrations_and_seed():
         # Ejecutar el seeder para asegurar el usuario administrador inicial
         print("Ejecutando seeder para usuario administrador...")
         seed()
+    except ImportError:
+        print("AVISO: El módulo 'alembic' no está instalado. Saltando migraciones automáticas.")
     except Exception as e:
         print(f"Error en el proceso de inicio de base de datos: {e}")
 

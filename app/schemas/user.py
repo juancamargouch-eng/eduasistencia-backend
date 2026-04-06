@@ -26,7 +26,7 @@ class User(UserBase):
 class Token(BaseModel):
     access_token: str
     token_type: str
-    is_superuser: bool
+    is_superuser: Optional[bool] = False
     role: Optional[str] = "DOCENTE"
 
 class TokenData(BaseModel):

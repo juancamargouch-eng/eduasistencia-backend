@@ -161,10 +161,93 @@ class TelegramService:
             return False
 
     @staticmethod
+    async def broadcast_announcement(db: Session, announcement_id: int):
+        """
+        Envío masivo de un comunicado a los estudiantes/padres correspondientes vía Telegram.
+        """
+        try:
+            from ..models.announcement import Announcement
+            from ..models.student import Student
+
+            # 1. Obtener comunicado y autor
+            ann = db.query(Announcement).filter(Announcement.id == announcement_id).first()
+            if not ann: return
+            
+            author = ann.author
+            
+            # 2. Configuración de Telegram
+            config = db.query(TelegramConfig).filter(TelegramConfig.is_active == True).first()
+            if not config or not config.api_id or not config.api_hash:
+                print("DEBUG: No hay configuración de Telegram activa para el broadcast.")
+                return
+
+            # 3. Construir Cabecera de Identidad
+            if author.is_superuser:
+                header = "🏢 <b>COMUNICADO INSTITUCIONAL</b>"
+            elif author.role == "DIRECTOR":
+                header = f"👨‍💼 <b>COMUNICADO DE DIRECCIÓN</b>\n👤 <i>{author.full_name}</i>"
+            elif author.role == "ADMIN":
+                header = "🏢 <b>COMUNICADO DE ADMINISTRACIÓN</b>"
+            elif author.role == "DOCENTE":
+                header = f"👨‍🏫 <b>COMUNICADO DEL DOCENTE</b>\n👤 <i>{author.full_name}</i>"
+            else:
+                header = "📩 <b>NUEVO COMUNICADO</b>"
+
+            now_str = datetime.now().strftime("%d/%m/%Y")
+            message = (
+                f"{header}\n"
+                f"📅 {now_str}\n"
+                f"📌 <b>{ann.title}</b>\n\n"
+                f"{ann.content}"
+            )
+
+            # 4. Filtrar destinatarios
+            query = db.query(Student).filter(Student.is_active == True, Student.notify_telegram == True)
+            
+            if ann.target_grade and ann.target_grade != "TODOS":
+                query = query.filter(Student.grade == ann.target_grade)
+            if ann.target_section and ann.target_section != "TODOS":
+                query = query.filter(Student.section == ann.target_section)
+                
+            recipients = query.all()
+            print(f"DEBUG: Iniciando envío masivo de comunicado {ann.id} a {len(recipients)} destinatarios.")
+
+            # 5. Envío Masivo (Bucle controlado)
+            count = 0
+            for student in recipients:
+                target = student.telegram_user_id or student.telegram_chat_id
+                if not target: continue
+                
+                success = await TelegramService.send_message(
+                    config.api_id, config.api_hash, config.bot_token,
+                    target, message, phone=config.phone
+                )
+                if success: count += 1
+                
+                # Pequeña pausa para evitar rate-limits de Telegram en envíos grandes
+                if len(recipients) > 10:
+                    await asyncio.sleep(0.1)
+
+            print(f"DEBUG: Broadcast finalizado. {count}/{len(recipients)} mensajes enviados.")
+
+        except Exception as e:
+            print(f"DEBUG CRITICAL ERROR en broadcast_announcement: {str(e)}")
+
+    @staticmethod
     async def send_attendance_notification(db: Session, student: Student, log: AttendanceLog):
         try:
-            print(f"DEBUG: Iniciando proceso de notificación para {student.full_name}")
-            
+            # 3. Format message safely
+            def get_data(obj, key, default=None):
+                if isinstance(obj, dict):
+                    return obj.get(key, default)
+                return getattr(obj, key, default)
+
+            full_name = get_data(student, "full_name", "Estudiante")
+            chat_id = get_data(student, "telegram_chat_id")
+            user_id = get_data(student, "telegram_user_id")
+            notify = get_data(student, "notify_telegram", True)
+            photo = get_data(student, "photo_url")
+
             # 1. Get Telegram Config
             config = db.query(TelegramConfig).filter(TelegramConfig.is_active == True).first()
             if not config:
@@ -175,25 +258,18 @@ class TelegramService:
                 print(f"DEBUG: Configuración incompleta (ID/Hash faltante). ID: {config.api_id}")
                 return
 
-            print(f"DEBUG: Configuración encontrada. Usando modo: {'Usuario' if config.phone else 'Bot'}")
-
-            # Check if we have at least user phone or bot token
-            if not config.phone and not config.bot_token:
-                print("DEBUG: Ni sesión de usuario ni token de bot disponibles.")
-                return
-
             # 2. Check if student has telegram linked and notify enabled
-            if not student.telegram_chat_id:
-                print(f"DEBUG: El estudiante {student.full_name} no tiene chat_id configurado.")
+            if not chat_id:
+                print(f"DEBUG: El estudiante {full_name} no tiene chat_id configurado.")
                 return
                 
-            if not student.notify_telegram:
-                print(f"DEBUG: Las notificaciones están desactivadas para {student.full_name}.")
+            if not notify:
+                print(f"DEBUG: Las notificaciones están desactivadas para {full_name}.")
                 return
 
-            print(f"DEBUG: Preparando mensaje para chat_id: {student.telegram_chat_id}")
+            print(f"DEBUG: Preparando mensaje para chat_id: {chat_id}")
 
-            # 3. Format message
+            # 3. Format message contents
             is_entry = log.event_type == 'ENTRY'
             
             if is_entry:
@@ -208,7 +284,7 @@ class TelegramService:
             time_str = log.timestamp.strftime("%H:%M:%S")
             message = (
                 f"{emoji} <b>Notificación de {event_name.capitalize()}</b>\n\n"
-                f"El estudiante <b>{student.full_name}</b> ha registrado su "
+                f"El estudiante <b>{full_name}</b> ha registrado su "
                 f"<b>{event_name.lower()}</b>.\n\n"
                 f"📍 <b>Estado:</b> {status_text}\n"
                 f"🕒 <b>Hora:</b> {time_str}\n"
@@ -219,22 +295,14 @@ class TelegramService:
             file_path = None
             is_temp_file = False
             
-            if student.photo_url:
-                # If it's a full URL (legacy or external), we can't easily download it here without requests
-                # But if it's an S3 key (doesn't start with http), we download it
-                if not student.photo_url.startswith("http"):
-                    print(f"DEBUG: Descargando foto de S3 para Telegram: {student.photo_url}")
-                    file_path = StorageService.download_to_temp_file(student.photo_url)
+            if photo:
+                if not photo.startswith("http"):
+                    file_path = StorageService.download_to_temp_file(photo)
                     if file_path:
                         is_temp_file = True
-                        print(f"DEBUG: Foto S3 descargada en path temporal: {file_path}")
-                else:
-                    # Legacy local fallback (if the URL is still a relative path without http)
-                    # This part is probably not needed if all photo_urls are keys or full URLs
-                    pass
 
             # 5. Send message (Async)
-            target_chat = student.telegram_user_id or student.telegram_chat_id
+            target_chat = user_id or chat_id
             
             try:
                 success = await TelegramService.send_message(
@@ -248,13 +316,12 @@ class TelegramService:
                 if is_temp_file and file_path and os.path.exists(file_path):
                     try:
                         os.remove(file_path)
-                        print(f"DEBUG: Archivo temporal de foto eliminado: {file_path}")
                     except:
                         pass
             
             if success:
-                print(f"DEBUG: Notificación enviada correctamente a {student.full_name}")
+                print(f"DEBUG: Notificación enviada correctamente a {full_name}")
             else:
-                print(f"DEBUG: Error al intentar enviar la notificación a {student.full_name}")
+                print(f"DEBUG: Error al intentar enviar la notificación a {full_name}")
         except Exception as e:
             print(f"DEBUG CRITICAL ERROR en send_attendance_notification: {str(e)}")

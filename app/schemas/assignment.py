@@ -21,9 +21,9 @@ class AssignmentUpdate(BaseModel):
 
 class Assignment(AssignmentBase):
     id: int
-    teacher_id: int
+    teacher_id: Optional[int] = None
     file_url: Optional[str] = None
-    created_at: datetime
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
