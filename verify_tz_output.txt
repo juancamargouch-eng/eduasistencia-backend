@@ -1,8 +1,0 @@
-﻿Alumno: CAMACHO, JOAN
-Timestamp BD: 2026-04-05 16:16:31.554220-05:00 (tz=UTC-05:00)
-Hora actual:  2026-04-05 19:04:53.779238-05:00 (tz=UTC-05:00)
-Diferencia:   2:48:22.225018
-Menor a 2h?:  False
-
-SUCCESS: La resta de timestamps funciona correctamente.
-El Error 500 en /api/attendance/verify ha sido eliminado.

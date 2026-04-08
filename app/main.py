@@ -44,17 +44,12 @@ app = FastAPI(title="Sistema de Asistencia Escolar Inteligente")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# CORS middleware - Configuración robusta para producción y local
+# CORS middleware - Configuración dinámica
 cors_origins_str = os.getenv("CORS_ORIGINS", "")
-# Dominios base que siempre permitimos
-default_origins = [
-    "http://localhost:5173",
-    "http://localhost:3000",
-    "https://asistencia.kalelsac.com",
-    "https://asistenciabackend.kalelsac.com"
-]
+# Dominios locales por defecto para desarrollo
+default_origins = ["http://localhost:5173", "http://localhost:3000"]
 
-# Unificar orígenes del .env con los por defecto
+# Unificar y filtrar duplicados: .env + locales
 env_origins = [origin.strip() for origin in cors_origins_str.split(",") if origin.strip()]
 origins = list(set(default_origins + env_origins))
 
