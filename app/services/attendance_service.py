@@ -37,9 +37,8 @@ class AttendanceService:
             from fastapi import HTTPException
             raise HTTPException(status_code=400, detail="Estudiante inactivo")
 
-        # 2. DETERMINAR TIPO DE EVENTO (ENTRY o EXIT)
+        # 2. DETERMINAR TIPO DE EVENTO Y BLOQUEO TEMPORAL (Evaluación perezosa)
         today = date.today()
-        # Buscar el registro de entrada del día de hoy
         existing_entry = db.query(models.AttendanceLog).filter(
             models.AttendanceLog.student_id == student.id,
             models.AttendanceLog.event_type == "ENTRY",
@@ -48,9 +47,11 @@ class AttendanceService:
         ).first()
 
         current_event_type = event_type_override or "ENTRY"
+        is_duplicate = False
+        is_jornada_completa = False
+        duplicate_detail = None
         
         if not event_type_override and existing_entry:
-            # Si ya hay entrada, verificar salida
             existing_exit = db.query(models.AttendanceLog).filter(
                 models.AttendanceLog.student_id == student.id,
                 models.AttendanceLog.event_type == "EXIT",
@@ -59,38 +60,25 @@ class AttendanceService:
             ).first()
 
             if existing_exit:
-                from fastapi import HTTPException
-                
-                # Safe date formatting
+                is_jornada_completa = True
                 entry_time = existing_entry.timestamp.strftime('%H:%M') if hasattr(existing_entry.timestamp, 'strftime') else str(existing_entry.timestamp)
                 exit_time = existing_exit.timestamp.strftime('%H:%M') if hasattr(existing_exit.timestamp, 'strftime') else str(existing_exit.timestamp)
-                
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "message": "Jornada completada por hoy",
-                        "timestamp": f"E: {entry_time} | S: {exit_time}",
-                        "student": {
-                            "full_name": getattr(student, 'full_name', "Estudiante"),
-                            "photo_url": StudentService.prepare_student_response(student, for_kiosk=True).get("photo_url", "")
-                        }
+                duplicate_detail = {
+                    "message": "Jornada completada por hoy",
+                    "timestamp": f"E: {entry_time} | S: {exit_time}",
+                    "student": {
+                        "full_name": getattr(student, 'full_name', "Estudiante"),
+                        "photo_url": StudentService.prepare_student_response(student, for_kiosk=True).get("photo_url", "")
                     }
-                )
-
-            # BLOQUEO DE 2 HORAS (Cool-down)
-            # IMPORTANTE: PostgreSQL retorna TIMESTAMP WITH TIMEZONE (offset-aware).
-            # datetime.now() es offset-naive. Se debe usar la misma timezone para restar.
-            now_aware = datetime.now(existing_entry.timestamp.tzinfo)
-            time_diff = now_aware - existing_entry.timestamp
-            if time_diff < timedelta(hours=2):
-                from fastapi import HTTPException
-                
-                # Safe date formatting
-                entry_time = existing_entry.timestamp.strftime("%H:%M:%S") if hasattr(existing_entry.timestamp, 'strftime') else str(existing_entry.timestamp)
-                
-                raise HTTPException(
-                    status_code=409,
-                    detail={
+                }
+            else:
+                # BLOQUEO DE 2 HORAS (Cool-down)
+                now_aware = datetime.now(existing_entry.timestamp.tzinfo)
+                time_diff = now_aware - existing_entry.timestamp
+                if time_diff < timedelta(hours=2):
+                    is_duplicate = True
+                    entry_time = existing_entry.timestamp.strftime("%H:%M:%S") if hasattr(existing_entry.timestamp, 'strftime') else str(existing_entry.timestamp)
+                    duplicate_detail = {
                         "message": "Ya marcó su entrada",
                         "timestamp": entry_time,
                         "student": {
@@ -98,17 +86,16 @@ class AttendanceService:
                             "photo_url": StudentService.prepare_student_response(student, for_kiosk=True).get("photo_url", "")
                         }
                     }
-                )
-            
-            # Si pasaron más de 2 horas, es una Salida
-            current_event_type = "EXIT"
+                else:
+                    # Si pasaron más de 2 horas, es una Salida
+                    current_event_type = "EXIT"
 
+        # 3. EVALUACIÓN BIOMÉTRICA STRICTA (Prioridad)
         failure_reason = None
         verification_status = False
         confidence_score = 0.0
         status = "PRESENT"
 
-        # 3. Process Face Descriptor
         try:
             descriptor = json.loads(face_descriptor)
         except:
@@ -118,28 +105,34 @@ class AttendanceService:
             if skip_biometrics:
                 verification_status = True
                 confidence_score = 1.0
-            # 4. Compare with stored encoding
             elif student.face_encoding:
                 match, distance = compare_faces(student.face_encoding, descriptor)
                 if match:
                     verification_status = True
                     confidence_score = max(0.0, min(1.0, 1.0 - (distance / 0.9))) 
-                    
-                    # 5. CHECK SCHEDULE / TOLERANCE (Solo para ENTRADAS)
-                    if current_event_type == "ENTRY" and student.schedule:
-                        schedule_start = student.schedule.start_time
-                        tolerance = student.schedule.tolerance_minutes or 0
-                        
-                        dummy_date = datetime.now().date()
-                        start_dt = datetime.combine(dummy_date, schedule_start)
-                        deadline_dt = start_dt + timedelta(minutes=tolerance)
-                        
-                        if datetime.now() > deadline_dt:
-                            status = "LATE"
                 else:
                     failure_reason = "Rostro No Coincide"
             else:
                 failure_reason = "Estudiante sin datos faciales"
+                
+        # 4. APLICAR REGLAS DE NEGOCIO (Solo si Biometría es Exitosa)
+        if verification_status:
+            # Si el rostro fue exitoso pero ya había ingresado, abortamos con el 409
+            if is_jornada_completa or is_duplicate:
+                from fastapi import HTTPException
+                raise HTTPException(status_code=409, detail=duplicate_detail)
+                
+            # CHECK SCHEDULE / TOLERANCE (Solo para ENTRADAS)
+            if current_event_type == "ENTRY" and student.schedule:
+                schedule_start = student.schedule.start_time
+                tolerance = student.schedule.tolerance_minutes or 0
+                
+                dummy_date = datetime.now().date()
+                start_dt = datetime.combine(dummy_date, schedule_start)
+                deadline_dt = start_dt + timedelta(minutes=tolerance)
+                
+                if datetime.now() > deadline_dt:
+                    status = "LATE"
         
         # 6. Log Attendance
         log = models.AttendanceLog(
